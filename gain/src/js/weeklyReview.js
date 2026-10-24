@@ -192,6 +192,7 @@ export async function openWeeklyReportCard() {
           <div class="wr-sub" id="wr-subtitle">Reading the signal…</div>
         </div>
         <div class="wr-head-actions">
+          <button class="wr-btn ghost" id="wr-regen" hidden title="Discard cache and ask Groq again (useful after you've done a warmup confidence check)">↻ Regenerate</button>
           <button class="wr-btn ghost" id="wr-download" hidden>⬇ Download .md</button>
           <button class="wr-close" aria-label="Close">✕</button>
         </div>
@@ -272,6 +273,16 @@ function paintReport(scrim, report, ctx) {
     dl.addEventListener("click", () => {
       const md = reportToMarkdown(report, ctx);
       downloadFile(`gain-weekly-report-${ctx.todayKey}.md`, md);
+    });
+  }
+  const regen = scrim.querySelector("#wr-regen");
+  if (regen) {
+    regen.hidden = false;
+    regen.addEventListener("click", async () => {
+      try { localStorage.removeItem(REPORT_CACHE_PREFIX + ctx.weekStartKey); } catch (_) {}
+      scrim.remove();
+      document.body.style.overflow = "";
+      await openWeeklyReportCard();
     });
   }
 
@@ -355,9 +366,15 @@ function paintReportError(scrim, msg) {
       <div class="wr-err-ico">⚠</div>
       <div class="wr-err-title">Couldn't generate the report</div>
       <p>${esc(msg)}</p>
-      <button class="wr-btn primary" onclick="this.closest('.wr-scrim').remove(); document.body.style.overflow='';">Close</button>
+      <div class="wr-err-actions">
+        <button class="wr-btn primary" id="wr-err-close">Close</button>
+      </div>
     </div>
   `;
+  body.querySelector("#wr-err-close")?.addEventListener("click", () => {
+    document.body.style.overflow = "";
+    scrim.remove();
+  });
 }
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]); }
@@ -583,7 +600,23 @@ function injectReportStyles() {
     .wr-tile-lb { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; color: var(--mut); text-transform: uppercase; margin-bottom: 6px; }
     .wr-tile-big { font: 700 22px/1.1 var(--font-sans); color: var(--ink); letter-spacing: -.02em; margin-bottom: 2px; }
     .wr-tile-sub { font: 400 11.5px/1.3 var(--font-sans); color: var(--mut); }
-    @media (max-width: 640px) { .wr-tiles { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 640px) { .wr-tiles { grid-template-columns: repeat(2, 1fr); } .wr-pat-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 480px) {
+      .wr-head { padding: 16px 18px 14px; }
+      .wr-title { font-size: 22px; }
+      .wr-body { padding: 20px 20px; }
+      .wr-letter { max-width: 100%; }
+      .wr-verdict { font-size: 16px; padding: 14px 16px; margin-bottom: 20px; }
+      .wr-tiles { grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 24px; }
+      .wr-tile { padding: 10px 12px; }
+      .wr-tile-big { font-size: 18px; }
+      .wr-sec h3 { font-size: 14px; }
+      .wr-sec ul, .wr-sec ol, .wr-sec p { font-size: 13.5px; }
+      .wr-ask { padding: 16px 18px; }
+      .wr-ask-text { font-size: 15px !important; }
+      .wr-closing { font-size: 14px; padding: 20px 0; }
+      .wr-head-actions .wr-btn { padding: 7px 10px; font-size: 11.5px; }
+    }
     .wr-sec { margin-bottom: 26px; }
     .wr-sec h3 { font: 700 15px/1.3 var(--font-sans); color: var(--ink); margin: 0 0 10px; letter-spacing: -.01em; }
     .wr-sec ul, .wr-sec ol { padding-left: 22px; margin: 0; font: 400 14px/1.65 var(--font-sans); color: var(--ink); }

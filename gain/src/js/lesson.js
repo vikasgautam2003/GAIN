@@ -1739,6 +1739,24 @@ function injectStyles() {
     .lsn-trade-con span { color: var(--red); font-weight: 700; }
     @media (max-width: 560px) { .lsn-trade-row { grid-template-columns: 1fr; } }
 
+    /* Mobile — tighten lesson modal across the board */
+    @media (max-width: 560px) {
+      .lsn-body { padding: 16px 18px; }
+      .lsn-sec h3 { font-size: 14.5px; }
+      .lsn-step { margin-right: 8px; min-width: 22px; height: 22px; }
+      .lsn-code { padding: 12px 14px; font-size: 11.5px; }
+      .lsn-code-badge { display: none; }
+      .lsn-line-ex li { grid-template-columns: 1fr; gap: 4px; padding: 8px 0; }
+      .lsn-line-code { white-space: pre-wrap; word-break: break-word; }
+      .lsn-qstem { font-size: 13px; }
+      .lsn-qopt { padding: 9px 10px; font-size: 12.5px; }
+      .lsn-qr-score { font-size: 24px; }
+      .lsn-pointer-list li { padding: 10px 12px 10px 38px; font-size: 12.5px; }
+      .lsn-pointer-list li::before { left: 8px; width: 22px; height: 20px; font-size: 9.5px; }
+      .lsn-cmx-big { font-size: 18px; }
+      .lsn-code-wrap { margin-left: -4px; margin-right: -4px; }
+    }
+
     /* Interview pointers */
     .lsn-pointers { background: color-mix(in oklab, var(--ink) 4%, var(--paper)); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
     .lsn-pointer-list { list-style: none; padding: 0; margin: 8px 0 0; counter-reset: ptr; }

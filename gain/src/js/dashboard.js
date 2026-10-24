@@ -553,6 +553,15 @@ function styles() {
       .dash-card-progress, .dash-card-week, .dash-card-target,
       .dash-card-upcoming, .dash-card-recent, .dash-card-mentor, .dash-card-honor { grid-column: 1; grid-row: auto; }
     }
+    @media (max-width: 560px) {
+      .dash-kpis { grid-template-columns: 1fr 1fr; gap: var(--s-2); }
+      .kpi { padding: var(--s-3); }
+      .kpi-val { font-size: 22px; }
+      .mentor-tile-body { gap: 10px; }
+      .mentor-tile-ico { font-size: 24px; }
+      .mentor-tile-text b { font-size: 13px; }
+      .mentor-tile-text span { font-size: 11.5px; }
+    }
   </style>
   `;
 }

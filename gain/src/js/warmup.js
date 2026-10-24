@@ -966,6 +966,18 @@ function injectStyles() {
     .wu-mode-sub { font: 500 12.5px/1.4 var(--font-sans); color: var(--mut); }
     .wu-mode-meta { font: 500 11px/1 var(--font-sans); color: var(--mut); margin-top: 6px; letter-spacing: .02em; }
     @media (max-width: 560px) { .wu-mode-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 480px) {
+      .wu-conf-row { flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; }
+      .wu-conf-topic { font-size: 13px; }
+      .wu-conf-stars { align-self: stretch; justify-content: space-between; }
+      .wu-conf-star { width: 32px; height: 32px; font-size: 20px; }
+      .wu-conf-title { font-size: 17px; }
+      .wu-conf-sub { font-size: 12.5px; }
+      .wu-mode-card { padding: 14px 16px; }
+      .wu-mode-ico { font-size: 22px; }
+      .wu-mode-title { font-size: 14px; }
+      .wu-intro-title { font-size: 17px; }
+    }
 
     /* --- Confidence capture --- */
     .wu-confidence { text-align: center; padding: 10px 6px; }

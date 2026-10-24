@@ -621,9 +621,22 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
       .settings .s-card input[type="number"],
       .settings .s-card input[type="url"],
       .settings .s-card select,
-      .settings .s-card textarea { min-width: 360px; max-width: 100%; }
+      .settings .s-card textarea { min-width: min(360px, 100%); max-width: 100%; }
       .settings .s-card .grid-2 { gap: 32px; }
       .settings .s-card .grid-3 { gap: 28px; }
+      @media (max-width: 560px) {
+        .settings .s-layout { padding: 0 14px; }
+        .settings .s-card { padding: 32px 0; }
+        .settings .s-card .grid-2, .settings .s-card .grid-3 { gap: 18px; grid-template-columns: 1fr !important; }
+        .settings .s-card input[type="text"],
+        .settings .s-card input[type="password"],
+        .settings .s-card input[type="number"],
+        .settings .s-card input[type="url"],
+        .settings .s-card select,
+        .settings .s-card textarea { min-width: 0; width: 100%; }
+        .settings .s-topbar { max-width: calc(100% - 20px); }
+        .settings .stb-chip { padding: 6px 12px; font-size: 12px; }
+      }
 
       /* Section header: title + sub-tag UNDERNEATH (not stretched to the right edge) */
       .settings .s-head {
