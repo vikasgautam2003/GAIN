@@ -355,13 +355,7 @@ fn first_run_import(app: tauri::AppHandle, source_dir: String) -> Result<Vec<Str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Localhost plugin: serves the frontend over http://localhost:PORT so the
-    // webview origin is a real public-safe http origin (not tauri://localhost
-    // or https://tauri.localhost — both of which YouTube's embed endpoint
-    // rejects as invalid Referers, firing Error 153).
-    let port: u16 = 1430;
     tauri::Builder::default()
-        .plugin(tauri_plugin_localhost::Builder::new(port).build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::default().build())

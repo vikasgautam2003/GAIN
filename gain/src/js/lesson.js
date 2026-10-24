@@ -1057,12 +1057,15 @@ async function resolveMedia(scrim, { imageQueries, youtubeQuery }) {
 // runtime errors (region block, age gate, deleted video) are auto-skipped.
 // If every candidate fails, we fall back to a clean "Watch on YouTube ↗" card
 // so the user always has a working path.
-// Plain iframe embed. With `useHttpsScheme: true` in tauri.conf.json, the
-// webview loads from https://tauri.localhost — YouTube now sees an https
-// Referer and accepts the embed. YouTube Data API's videoEmbeddable=true
-// filter ensures the candidates are embed-allowed; "Try next" lets the user
-// cycle manually if a specific video has runtime issues (region, age gate);
-// "Watch on YouTube" opens in the OS browser as a safety net.
+// Thumbnail-card UX. YouTube's embed endpoint requires a valid public-https
+// Referer header, and in a Tauri webview the origin is `tauri://localhost`
+// (not an https URL), so YouTube fires Error 153 on every embed. Rather than
+// break the whole app chasing a webview-origin workaround (tried useHttpsScheme
+// and the localhost plugin — both introduced regressions), we render a rich
+// YouTube-style card with the thumbnail + title + channel + a prominent Watch
+// button that opens the video in the system browser via the open_url Rust
+// command. Zero Error 153, full-screen playback, no embed restrictions.
+// User can cycle through the Data-API-filtered picks with "Try next".
 function renderVideo(slot, { candidates, youtubeQuery, currentIdx = 0 }) {
   const total = candidates.length;
   const current = candidates[currentIdx];
@@ -1072,22 +1075,27 @@ function renderVideo(slot, { candidates, youtubeQuery, currentIdx = 0 }) {
   }
   const safeTitle = current.title || youtubeQuery;
   const channel = current.channel || "";
+  const videoUrl = `https://www.youtube.com/watch?v=${esc(current.videoId)}`;
+  const thumbUrl = `https://i.ytimg.com/vi/${esc(current.videoId)}/hqdefault.jpg`;
+
   slot.innerHTML = `
-    <div class="lsn-vid-frame">
-      <iframe
-        class="lsn-vid-iframe"
-        src="https://www.youtube-nocookie.com/embed/${esc(current.videoId)}?modestbranding=1&rel=0&playsinline=1"
-        title="${esc(safeTitle)}"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-        allowfullscreen
-        loading="lazy"
-        referrerpolicy="strict-origin-when-cross-origin"></iframe>
-    </div>
-    <div class="lsn-vid-caption">${esc(safeTitle)}${channel ? ` · <span class="lsn-vid-ch">${esc(channel)}</span>` : ""}</div>
-    <div class="lsn-vid-controls">
-      <span class="lsn-vid-counter">${currentIdx + 1} / ${total}</span>
-      ${total > 1 ? `<button class="lsn-vid-ctrl" data-next-vid>↷ Not playing? Try next</button>` : ""}
-      <a class="lsn-vid-ctrl lsn-vid-ext" href="https://www.youtube.com/watch?v=${esc(current.videoId)}" target="_blank" rel="noopener" data-ext>Open on YouTube ↗</a>
+    <div class="lsn-vid-thumbcard">
+      <a class="lsn-vid-thumb-link" href="${videoUrl}" data-ext title="Open on YouTube">
+        <img class="lsn-vid-thumb-img" src="${thumbUrl}" alt="${esc(safeTitle)}" loading="lazy" />
+        <div class="lsn-vid-thumb-overlay">
+          <div class="lsn-vid-play-btn">▶</div>
+        </div>
+        <div class="lsn-vid-thumb-badge">YouTube ↗</div>
+      </a>
+      <div class="lsn-vid-thumb-meta">
+        <div class="lsn-vid-thumb-title">${esc(safeTitle)}</div>
+        ${channel ? `<div class="lsn-vid-thumb-channel">${esc(channel)}</div>` : ""}
+      </div>
+      <div class="lsn-vid-controls static">
+        <span class="lsn-vid-counter">${currentIdx + 1} of ${total}</span>
+        ${total > 1 ? `<button class="lsn-vid-ctrl" data-next-vid>↷ Try next pick</button>` : ""}
+        <a class="lsn-vid-ctrl lsn-vid-ext" href="${videoUrl}" data-ext>▶ Watch on YouTube ↗</a>
+      </div>
     </div>
   `;
   slot.querySelector("[data-next-vid]")?.addEventListener("click", () => {
