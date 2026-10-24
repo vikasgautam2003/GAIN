@@ -14,6 +14,7 @@
     "windows": [
       {
         "title": "GAIN",
+        "url": "http://localhost:1430",
         "width": 1280,
         "height": 820,
         "minWidth": 1000,
@@ -22,12 +23,11 @@
         "fullscreen": false,
         "center": true,
         "decorations": true,
-        "transparent": false,
-        "useHttpsScheme": true
+        "transparent": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: asset: https: https://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://s.ytimg.com; connect-src 'self' ipc: http://ipc.localhost https://api.groq.com https://api.x.ai https://api.openai.com https://serpapi.com https://www.googleapis.com; frame-src https://www.youtube.com https://www.youtube-nocookie.com; font-src 'self' data:"
+      "csp": "default-src 'self' http://localhost:1430; img-src 'self' http://localhost:1430 data: asset: https: https://asset.localhost; style-src 'self' http://localhost:1430 'unsafe-inline'; script-src 'self' http://localhost:1430 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://s.ytimg.com; connect-src 'self' http://localhost:1430 ipc: http://ipc.localhost https://api.groq.com https://api.x.ai https://api.openai.com https://serpapi.com https://www.googleapis.com; frame-src https://www.youtube.com https://www.youtube-nocookie.com; font-src 'self' http://localhost:1430 data:"
     }
   },
   "bundle": {
