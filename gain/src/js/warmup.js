@@ -98,6 +98,35 @@ function pickWarmupSource(dateKey) {
 function collectModeContext(mode, dateKey = todayKey()) {
   const dayLog = getDayLog();
 
+  if (mode === "yesterday") {
+    const problems = [];
+    const topicPool = new Set();
+    const yK = (() => {
+      try {
+        const d = new Date(dateKey + "T12:00:00");
+        d.setDate(d.getDate() - 1);
+        return calendarKey(d);
+      } catch { return null; }
+    })();
+    const entry = yK ? dayLog[yK] : null;
+    if (entry && Array.isArray(entry.done)) {
+      for (const ref of entry.done) {
+        const t = entry.assigned.find(x => x.ref === ref);
+        if (!t || !t.title || t.kind === "warmup" || t.kind === "log") continue;
+        problems.push({
+          title: t.title, pattern: t.pattern || "", difficulty: t.difficulty || "",
+          sheet: t.sheet || null, rowIndex: t.rowIndex ?? null,
+        });
+        if (t.pattern) topicPool.add(t.pattern);
+      }
+    }
+    return {
+      title: "Yesterday's topics",
+      problems: problems.slice(0, 12),
+      topicPool: Array.from(topicPool).slice(0, 6),
+    };
+  }
+
   if (mode === "this-week") {
     const problems = [];
     const topicPool = new Set();
@@ -267,8 +296,10 @@ function showModePicker(scrim, task, onPick) {
   scrim.querySelector("#wu-skel").hidden = true;
   const stage = scrim.querySelector("#wu-stage");
   stage.hidden = false;
+  const yesterday = collectModeContext("yesterday");
   const thisWeek = collectModeContext("this-week");
   const tomorrow = collectModeContext("tomorrow");
+  const yCount = yesterday.problems.length;
   const twCount = thisWeek.problems.length;
   const tmCount = tomorrow.problems.length;
 
@@ -278,6 +309,12 @@ function showModePicker(scrim, task, onPick) {
       <div class="wu-intro-title">Pick a warm-up mode</div>
       <div class="wu-intro-sub">${QUIZ_COUNT} questions · reality check at the end · ₹${WARMUP_BOUNTY} on completion</div>
       <div class="wu-mode-grid">
+        <button class="wu-mode-card" data-mode="yesterday" ${yCount === 0 ? "disabled" : ""}>
+          <div class="wu-mode-ico">★</div>
+          <div class="wu-mode-title">Yesterday's topics</div>
+          <div class="wu-mode-sub">Lock memory in from yesterday's grind</div>
+          <div class="wu-mode-meta">${yCount ? `${yCount} problem${yCount === 1 ? "" : "s"} · ${yesterday.topicPool.length} topic${yesterday.topicPool.length === 1 ? "" : "s"}` : "No solves yesterday"}</div>
+        </button>
         <button class="wu-mode-card" data-mode="this-week" ${twCount === 0 ? "disabled" : ""}>
           <div class="wu-mode-ico">↻</div>
           <div class="wu-mode-title">This week's patterns</div>
@@ -477,7 +514,9 @@ async function fetchQuestions({ mode, ctx }) {
 
   const modeNote = mode === "tomorrow"
     ? "The user has NOT yet solved these — this warm-up PRIMES them before tomorrow's session."
-    : "The user solved these over the last 7 days — this warm-up REINFORCES recall.";
+    : mode === "yesterday"
+      ? "The user solved these YESTERDAY — this warm-up LOCKS the memory in while it's fresh."
+      : "The user solved these over the last 7 days — this warm-up REINFORCES recall across a wider sample.";
 
   const problemsText = ctx.problems.length
     ? ctx.problems.map((p, i) => `${i + 1}. ${p.title}${p.pattern ? ` [${p.pattern}]` : ""}${p.difficulty ? ` (${p.difficulty})` : ""}`).join("\n")
@@ -950,7 +989,7 @@ function injectStyles() {
     .wu-done-card p { margin: 0; color: var(--mut); font-size: 13.5px; }
 
     /* --- Mode picker --- */
-    .wu-mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0; }
+    .wu-mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0; }
     .wu-mode-card {
       display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
       padding: 18px 20px; text-align: left;
