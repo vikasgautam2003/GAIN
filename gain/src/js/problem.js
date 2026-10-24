@@ -8,7 +8,7 @@
 
 import { getSheets, getSettings, updateSheetRow, updateWallet, getWallet, getSolution, setSolution, callGrok, secure, on } from "./store.js";
 import { openLessonModal } from "./lesson.js";
-import { infoIcon } from "./info.js";
+import { infoIcon, renderMarkdown } from "./info.js";
 import { priceTask, todayKey, capTaskValue } from "./engine.js";
 import { fireTaskBagged } from "./celebrate.js";
 
@@ -559,7 +559,7 @@ function wireRelated(root, { sheetName, idx }) {
             <a class="pr-item-title" href="${openPath(hit)}">${esc(hit.title || "")}</a>
             <span class="pr-item-pattern">${esc(hit.pattern || hit.sheet || "")}</span>
           </div>
-          <p class="pr-item-reason">${esc(hit.reason || "")}</p>
+          <p class="pr-item-reason">${renderMarkdown(hit.reason || "")}</p>
         </div>
         <a class="pr-open" href="${openPath(hit)}">Open →</a>
       </article>

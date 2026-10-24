@@ -4,6 +4,7 @@
 
 import { getDayLog, getSheets, getWallet, getSettings, callGrok, secure } from "./store.js";
 import { todayKey, calendarKey } from "./engine.js";
+import { renderMarkdown } from "./info.js";
 
 const FIRED_KEY_PREFIX = "gain:recapFiredOn:";
 
@@ -224,10 +225,10 @@ No markdown. No preamble. JSON only.`,
         throw new Error("Couldn't parse the butler's response.");
       }
 
-      reflectionEl.innerHTML = `<p>${esc(parsed.reflection || "No reflection today — try the regenerate button.")}</p>`;
+      reflectionEl.innerHTML = `<p>${renderMarkdown(parsed.reflection || "No reflection today — try the regenerate button.")}</p>`;
       const bullets = Array.isArray(parsed.focus) ? parsed.focus.slice(0, 3) : [];
       focusEl.innerHTML = bullets.length
-        ? bullets.map(b => `<li>${esc(String(b))}</li>`).join("")
+        ? bullets.map(b => `<li>${renderMarkdown(String(b))}</li>`).join("")
         : `<li>No clear focus signal — regenerate.</li>`;
     } catch (e) {
       reflectionEl.innerHTML = `<p class="rcp-err">Butler couldn't reach Groq: ${esc(e.message || e)}. Click regenerate to retry.</p>`;

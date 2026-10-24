@@ -6,11 +6,14 @@
 // whenever today's dayLog has a `WARMUP-${dateKey}` task AND it isn't yet done.
 // Completing all 5 Qs marks that task done + credits ₹20.
 
-import { getDayLog, getSettings, getWallet, callGrok, secure, updateDayLog, updateWallet } from "./store.js";
-import { todayKey, calendarKey, tickTask } from "./engine.js";
+import { getDayLog, getSettings, getWallet, getSheets, callGrok, secure, updateDayLog, updateWallet } from "./store.js";
+import { todayKey, calendarKey, tickTask, setReviewOverride } from "./engine.js";
+import { renderMarkdown } from "./info.js";
+import { callGroqJSON } from "./groqJson.js";
 
 const CACHE_PREFIX = "gain:warmup:";
-const WARMUP_BOUNTY = 20;
+const WARMUP_BOUNTY = 30;    // bumped from 20 — 8 Qs + confidence capture earns more
+const QUIZ_COUNT = 8;
 
 // -------- public: ensure a warm-up task exists on today's plan --------
 // Called from ensureDailyPlan / Today boot. Adds a `WARMUP-${dateKey}` task
@@ -51,8 +54,10 @@ export async function ensureWarmupTask(dateKey = todayKey()) {
 }
 
 function pickWarmupSource(dateKey) {
+  // Legacy "default" source — kept for the task.sourceLabel on today's plan.
+  // The actual question-fetch now walks collectModeContext for the mode the
+  // user picked in the modal (this-week / tomorrow).
   const dayLog = getDayLog();
-  // yesterday = dateKey - 1 day (calendar math, since dateKey is a calendar key)
   const dK = (() => {
     try {
       const d = new Date(dateKey + "T12:00:00");
@@ -78,18 +83,84 @@ function pickWarmupSource(dateKey) {
     }
   }
 
-  // Fallback: pattern-of-the-week from the saved weeklyPlan
   const todayEntry = dayLog[dateKey];
   const theme = todayEntry?.weeklyPlan?.theme || todayEntry?.weeklyPlan?.title || null;
   if (theme) {
-    return {
-      kind: "pattern",
-      label: theme,                       // just the pattern name, no "pattern · " prefix
-      problems: [],
-      pattern: theme,
-    };
+    return { kind: "pattern", label: theme, problems: [], pattern: theme };
   }
   return null;
+}
+
+// Collect the question-generation context for a chosen mode.
+// Returns { title, problems: [{title, pattern, sheet, rowIndex, difficulty}], topicPool: [string] }
+// where topicPool is the deduped list of distinct patterns/topics for the
+// confidence-rating step after Q8.
+function collectModeContext(mode, dateKey = todayKey()) {
+  const dayLog = getDayLog();
+
+  if (mode === "this-week") {
+    const problems = [];
+    const topicPool = new Set();
+    // Walk back 7 days (not including today) — anything done.
+    for (let i = 1; i <= 7; i++) {
+      const d = new Date(dateKey + "T12:00:00");
+      d.setDate(d.getDate() - i);
+      const k = calendarKey(d);
+      const entry = dayLog[k];
+      if (!entry || !Array.isArray(entry.done) || !entry.done.length) continue;
+      for (const ref of entry.done) {
+        const t = entry.assigned.find(x => x.ref === ref);
+        if (!t || !t.title || t.kind === "warmup" || t.kind === "log") continue;
+        problems.push({
+          title: t.title, pattern: t.pattern || "", difficulty: t.difficulty || "",
+          sheet: t.sheet || null, rowIndex: t.rowIndex ?? null,
+        });
+        if (t.pattern) topicPool.add(t.pattern);
+      }
+    }
+    return {
+      title: "This week's patterns",
+      problems: problems.slice(0, 15),  // keep prompt small
+      topicPool: Array.from(topicPool).slice(0, 6),
+    };
+  }
+
+  if (mode === "tomorrow") {
+    // Walk forward through today's dayLog + tomorrow's planned entry.
+    const problems = [];
+    const topicPool = new Set();
+    const tK = (() => {
+      try {
+        const d = new Date(dateKey + "T12:00:00");
+        d.setDate(d.getDate() + 1);
+        return calendarKey(d);
+      } catch { return null; }
+    })();
+    const tEntry = tK ? dayLog[tK] : null;
+    const assigned = Array.isArray(tEntry?.assigned) ? tEntry.assigned : [];
+    for (const t of assigned) {
+      if (!t.title || t.kind === "warmup" || t.kind === "log") continue;
+      problems.push({
+        title: t.title, pattern: t.pattern || "", difficulty: t.difficulty || "",
+        sheet: t.sheet || null, rowIndex: t.rowIndex ?? null,
+      });
+      if (t.pattern) topicPool.add(t.pattern);
+    }
+    return {
+      title: "Tomorrow's topics",
+      problems: problems.slice(0, 10),
+      topicPool: Array.from(topicPool).slice(0, 6),
+    };
+  }
+
+  return { title: "", problems: [], topicPool: [] };
+}
+
+// How many non-empty problems in a given mode? Used to grey out the pick
+// button when the source is empty (e.g. no tomorrow plan).
+function modeHasContent(mode) {
+  const ctx = collectModeContext(mode);
+  return ctx.problems.length > 0;
 }
 
 // -------- quiz modal --------
@@ -126,45 +197,113 @@ export async function openWarmupQuiz({ root, taskRef }) {
   // ---- state ----
   const state = {
     idx: 0,
-    answers: new Array(5).fill(""),
-    hints: new Array(5).fill(null),       // hint text per Q
-    reveals: new Array(5).fill(null),     // revealed answer per Q
-    completed: new Array(5).fill(false),  // user hit next after seeing hint/answer or typed something
+    mode: null,                              // "this-week" | "tomorrow", picked at intro
+    topicPool: [],                           // populated after Groq returns
+    answers: new Array(QUIZ_COUNT).fill(""),
+    hints: new Array(QUIZ_COUNT).fill(null),
+    reveals: new Array(QUIZ_COUNT).fill(null),
+    completed: new Array(QUIZ_COUNT).fill(false),
   };
 
   const paintEverything = () => {
     paintQuestion(scrim, state, questions, close, async () => {
-      // All 5 done — credit bounty + mark task done
-      await finalizeQuiz(dateKey, taskRef);
-      // Micro celebration before closing
-      scrim.querySelector(".wu-done-overlay").classList.add("show");
-      setTimeout(() => { close(); if (root && typeof root.querySelector === "function") refreshToday(root); }, 1800);
+      // All questions done — show confidence capture BEFORE crediting bounty.
+      // Confidence stars become the auto-boost REDO signal.
+      paintConfidenceCapture(scrim, state, async () => {
+        await finalizeQuiz(dateKey, taskRef);
+        scrim.querySelector(".wu-done-overlay").classList.add("show");
+        setTimeout(() => { close(); if (root && typeof root.querySelector === "function") refreshToday(root); }, 1800);
+      });
     });
   };
 
-  if (!questions) {
-    // No cached quiz for today — show an explicit "Generate" screen.
-    // Groq only fires when the user clicks the button, saving credits.
-    showIntroGate(scrim, task, async () => {
-      // Show skeleton while fetching
-      scrim.querySelector("#wu-skel").hidden = false;
-      scrim.querySelector("#wu-stage").hidden = true;
-      try {
-        const qs = await fetchQuestions(task, scrim);
-        if (qs && qs.length === 5) {
-          questions = qs;
-          try { localStorage.setItem(cacheKey, JSON.stringify(qs)); } catch (_) {}
-          paintEverything();
-        } else {
-          showQuizError(scrim, "Couldn't generate questions. Check your Groq key in Settings.");
-        }
-      } catch (e) {
-        showQuizError(scrim, String(e.message || e));
+  const loadQuestionsForMode = async (mode) => {
+    state.mode = mode;
+    const ctx = collectModeContext(mode);
+    scrim.querySelector("#wu-skel").hidden = false;
+    scrim.querySelector("#wu-stage").hidden = true;
+    try {
+      const payload = await fetchQuestions({ mode, ctx });
+      if (payload?.questions?.length === QUIZ_COUNT) {
+        questions = payload.questions;
+        state.topicPool = payload.topicPool || ctx.topicPool || [];
+        try { localStorage.setItem(cacheKey + ":" + mode, JSON.stringify({ questions, topicPool: state.topicPool })); } catch (_) {}
+        paintEverything();
+      } else {
+        showQuizError(scrim, "Couldn't generate questions. Try again or switch mode.");
       }
+    } catch (e) {
+      showQuizError(scrim, String(e.message || e));
+    }
+  };
+
+  // Load any mode-specific cache we have from today
+  const tryLoadCached = (mode) => {
+    try {
+      const raw = localStorage.getItem(cacheKey + ":" + mode);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.questions?.length === QUIZ_COUNT) return parsed;
+      }
+    } catch (_) {}
+    return null;
+  };
+
+  showModePicker(scrim, task, async (mode) => {
+    const cached = tryLoadCached(mode);
+    if (cached) {
+      questions = cached.questions;
+      state.mode = mode;
+      state.topicPool = cached.topicPool || [];
+      paintEverything();
+    } else {
+      await loadQuestionsForMode(mode);
+    }
+  });
+}
+
+// --- Mode picker — "this week's patterns" vs "tomorrow's topics" ---
+function showModePicker(scrim, task, onPick) {
+  scrim.querySelector("#wu-skel").hidden = true;
+  const stage = scrim.querySelector("#wu-stage");
+  stage.hidden = false;
+  const thisWeek = collectModeContext("this-week");
+  const tomorrow = collectModeContext("tomorrow");
+  const twCount = thisWeek.problems.length;
+  const tmCount = tomorrow.problems.length;
+
+  stage.innerHTML = `
+    <div class="wu-intro">
+      <div class="wu-intro-ico">⚡</div>
+      <div class="wu-intro-title">Pick a warm-up mode</div>
+      <div class="wu-intro-sub">${QUIZ_COUNT} questions · reality check at the end · ₹${WARMUP_BOUNTY} on completion</div>
+      <div class="wu-mode-grid">
+        <button class="wu-mode-card" data-mode="this-week" ${twCount === 0 ? "disabled" : ""}>
+          <div class="wu-mode-ico">↻</div>
+          <div class="wu-mode-title">This week's patterns</div>
+          <div class="wu-mode-sub">Reinforce what you've seen</div>
+          <div class="wu-mode-meta">${twCount ? `${twCount} problem${twCount === 1 ? "" : "s"} · ${thisWeek.topicPool.length} topic${thisWeek.topicPool.length === 1 ? "" : "s"}` : "No activity this week"}</div>
+        </button>
+        <button class="wu-mode-card" data-mode="tomorrow" ${tmCount === 0 ? "disabled" : ""}>
+          <div class="wu-mode-ico">→</div>
+          <div class="wu-mode-title">Tomorrow's topics</div>
+          <div class="wu-mode-sub">Prime what's coming next</div>
+          <div class="wu-mode-meta">${tmCount ? `${tmCount} task${tmCount === 1 ? "" : "s"} planned · ${tomorrow.topicPool.length} topic${tomorrow.topicPool.length === 1 ? "" : "s"}` : "Nothing planned for tomorrow"}</div>
+        </button>
+      </div>
+      <div class="wu-intro-note">1 Groq call per mode. Questions cached per mode for today — switching is free the second time.</div>
+    </div>
+  `;
+  const foot = scrim.querySelector("#wu-foot");
+  if (foot) foot.hidden = true;
+  stage.querySelectorAll(".wu-mode-card").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (btn.disabled) return;
+      stage.querySelectorAll(".wu-mode-card").forEach(b => b.disabled = true);
+      btn.classList.add("picking");
+      await onPick(btn.dataset.mode);
     });
-  } else {
-    paintEverything();
-  }
+  });
 }
 
 // Pre-fetch gate — modal shows the source + a single "Generate" button.
@@ -213,17 +352,116 @@ async function finalizeQuiz(dateKey, taskRef) {
   if (!day) return;
   const task = day.assigned.find(t => t.ref === taskRef);
   if (!task) return;
-  if (day.done.includes(taskRef)) return;  // already credited
+  if (day.done.includes(taskRef)) return;
   await tickTask(dateKey, taskRef);
   await updateWallet(w => {
     w.earned += task.value;
-    w.ledger.push({
-      date: new Date().toISOString(),
-      type: "task",
-      amount: task.value,
-      label: task.title,
+    w.ledger.push({ date: new Date().toISOString(), type: "task", amount: task.value, label: task.title });
+  });
+}
+
+// --- Confidence capture — after Q8, user rates each topic 1-5. Topics ≤ 2
+// auto-boost a REDO for tomorrow (pushes matching sheet rows into the
+// spaced-rep queue regardless of their last ★ rating).
+function paintConfidenceCapture(scrim, state, onDone) {
+  const stage = scrim.querySelector("#wu-stage");
+  const foot = scrim.querySelector("#wu-foot");
+  if (foot) foot.hidden = true;
+  const topics = Array.isArray(state.topicPool) && state.topicPool.length
+    ? state.topicPool
+    : Array.from(new Set((state.answers || []).map((_, i) => "general"))).slice(0, 3);
+
+  // Groq-free best guess: topics tied to questions the user left blank/wrong
+  // start at 2 stars; topics with filled answers start at 3. User overrides.
+  const guessed = new Map();
+  topics.forEach(t => guessed.set(t, 3));
+
+  stage.hidden = false;
+  stage.innerHTML = `
+    <div class="wu-confidence">
+      <div class="wu-conf-ico">🎯</div>
+      <div class="wu-conf-title">Reality check</div>
+      <div class="wu-conf-sub">Rate how confident you feel on each topic right now. Topics you rate <b>★ ≤ 2</b> get auto-queued as REDOs for tomorrow.</div>
+      <div class="wu-conf-list">
+        ${topics.map(t => `
+          <div class="wu-conf-row" data-topic="${esc(t)}">
+            <div class="wu-conf-topic">${esc(t)}</div>
+            <div class="wu-conf-stars" role="radiogroup" aria-label="Confidence for ${esc(t)}">
+              ${[1,2,3,4,5].map(n => `<button class="wu-conf-star" data-score="${n}" aria-label="${n} star${n===1?"":"s"}">★</button>`).join("")}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+      <div class="wu-conf-footer">
+        <button class="wu-btn primary" id="wu-conf-submit" disabled>Finish — earn ₹${WARMUP_BOUNTY}</button>
+      </div>
+    </div>
+  `;
+
+  const scores = new Map();  // topic → N
+  const refreshBtn = () => {
+    const btn = stage.querySelector("#wu-conf-submit");
+    btn.disabled = scores.size < topics.length;
+    btn.textContent = scores.size < topics.length
+      ? `Rate all ${topics.length} topics (${scores.size}/${topics.length})`
+      : `Finish — earn ₹${WARMUP_BOUNTY}`;
+  };
+
+  stage.querySelectorAll(".wu-conf-row").forEach(row => {
+    const topic = row.dataset.topic;
+    row.querySelectorAll(".wu-conf-star").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const n = +btn.dataset.score;
+        scores.set(topic, n);
+        row.querySelectorAll(".wu-conf-star").forEach(b => {
+          b.classList.toggle("filled", +b.dataset.score <= n);
+        });
+        refreshBtn();
+      });
     });
   });
+  refreshBtn();
+
+  stage.querySelector("#wu-conf-submit").addEventListener("click", async () => {
+    const topicConfidence = {};
+    scores.forEach((n, t) => { topicConfidence[t] = n; });
+    const dateKey = todayKey();
+    await updateDayLog(dl => {
+      const d = dl[dateKey];
+      if (!d) return;
+      d.topicConfidence = { ...(d.topicConfidence || {}), ...topicConfidence };
+    });
+    // Auto-boost ≤2★ topics as tomorrow's REDO
+    const weak = [...scores.entries()].filter(([_, n]) => n <= 2).map(([t]) => t);
+    if (weak.length) {
+      await boostWeakTopicsAsRedo(weak);
+    }
+    await onDone();
+  });
+}
+
+// Walk all past dayLog solves; for any whose task.pattern matches a weak topic,
+// mark reviewOverride="tomorrow" so getDueRevisits forces it into tomorrow's queue.
+async function boostWeakTopicsAsRedo(weakTopics) {
+  const dayLog = getDayLog();
+  const lower = new Set(weakTopics.map(t => String(t).toLowerCase()));
+  const dates = Object.keys(dayLog).sort().reverse();
+  const seen = new Set();  // sheet#rowIndex — only the most-recent solve per row
+  for (const d of dates) {
+    const entry = dayLog[d];
+    if (!entry || !Array.isArray(entry.done)) continue;
+    for (const ref of entry.done) {
+      const t = entry.assigned?.find(x => x.ref === ref);
+      if (!t || !t.sheet || t.rowIndex == null) continue;
+      const key = `${t.sheet}#${t.rowIndex}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!t.pattern) continue;
+      if (!lower.has(String(t.pattern).toLowerCase())) continue;
+      // Force into tomorrow's queue via explicit review override.
+      await setReviewOverride(d, ref, "tomorrow");
+    }
+  }
 }
 
 function refreshToday(root) {
@@ -231,60 +469,82 @@ function refreshToday(root) {
   // a store event. The today module listens on dayLog/wallet changes already.
 }
 
-// -------- Groq fetch --------
-async function fetchQuestions(task, scrim) {
+// -------- Groq fetch — bulletproof pipeline, 8 Qs, mode-aware --------
+async function fetchQuestions({ mode, ctx }) {
   const apiKey = (await secure.get("groq_api_key").catch(() => null)) ||
                  (await secure.get("grok_api_key").catch(() => null));
-  if (!apiKey) {
-    showQuizError(scrim, "No Groq API key. Add one in Settings → AI butler.");
-    return null;
-  }
+  if (!apiKey) throw new Error("No Groq API key. Add one in Settings → AI butler.");
 
-  const ctx = buildQuestionsContext(task);
-  const res = await callGrok({
-    apiKey,
-    jsonMode: true,
-    system: `You are a GAIN FDE interview-prep warm-up coach. Generate EXACTLY 5 recall questions as STRICT JSON — no markdown, no preamble.
-Format: {"questions": [ { "type": "short" | "mcq", "prompt": "...", "options": ["A","B","C","D"] (ONLY if type=mcq), "answer_key": "1-letter MCQ answer OR the single-sentence short-answer key points" } × 5 ] }
+  const modeNote = mode === "tomorrow"
+    ? "The user has NOT yet solved these — this warm-up PRIMES them before tomorrow's session."
+    : "The user solved these over the last 7 days — this warm-up REINFORCES recall.";
 
-Rules:
-- Exactly 3 "short" and 2 "mcq".
-- Mix complexity-analysis, pattern-recognition, edge cases, trade-offs.
-- Each question references a SPECIFIC problem or SPECIFIC pattern from the context.
-- Short answers must be answerable in 1-2 sentences.
-- MCQ options are 4 total; "answer_key" is JUST the letter ("A"/"B"/"C"/"D").
-- Keyword-dense, interview-tone. No fluff, no theory lectures.
-- NEVER give the full solution — questions should probe recall, not require it.`,
-    user: ctx
-  });
+  const problemsText = ctx.problems.length
+    ? ctx.problems.map((p, i) => `${i + 1}. ${p.title}${p.pattern ? ` [${p.pattern}]` : ""}${p.difficulty ? ` (${p.difficulty})` : ""}`).join("\n")
+    : "(no specific problems in context — generate generic FDE warm-ups)";
+  const topicsText = ctx.topicPool.length ? ctx.topicPool.join(", ") : "mixed";
 
-  if (!res.ok) throw new Error(res.error || "Groq call failed");
+  const system = `You are a GAIN FDE interview-prep warm-up coach.
+Generate EXACTLY ${QUIZ_COUNT} questions as strict JSON.
 
-  let parsed;
-  try {
-    const raw = res.content.trim().replace(/^```json\s*|\s*```$/g, "");
-    parsed = JSON.parse(raw);
-  } catch (_) {
-    throw new Error("Couldn't parse quiz response.");
-  }
-  const qs = parsed.questions;
-  if (!Array.isArray(qs) || qs.length !== 5) throw new Error("Quiz didn't return 5 questions.");
-  return qs;
+Schema:
+{
+  "questions": [
+    { "type": "short" | "mcq", "prompt": "...", "options": ["A","B","C","D"] (ONLY if mcq), "answer_key": "letter A/B/C/D for mcq, OR 1-2 sentence model answer for short", "topic": "the specific pattern/topic this probes" }
+  ],
+  "topicPool": ["3-6 distinct patterns/topics covered across the questions"]
 }
 
-function buildQuestionsContext(task) {
-  if (task.sourceKind === "yesterday" && task.sourceProblems?.length) {
-    return `Yesterday's solved problems:
-${task.sourceProblems.map((p, i) => `${i + 1}. ${p.title} [${p.pattern || "no-pattern"}${p.difficulty ? ", " + p.difficulty : ""}]`).join("\n")}
+Rules:
+- EXACTLY ${QUIZ_COUNT} questions. 3 "short" and ${QUIZ_COUNT - 3} "mcq".
+- Each question references a SPECIFIC problem/pattern from the context.
+- "topic" on each question is the exact pattern name — used for confidence rating later.
+- "topicPool" is the deduped set of patterns across all 8 questions, 3-6 items.
+- Short answers must be answerable in 1-2 sentences.
+- MCQ options exactly 4; "answer_key" is JUST the letter ("A"/"B"/"C"/"D").
+- Mix: complexity analysis, pattern recognition, edge cases, trade-offs, one classic LeetCode probe.
+- Interview tone, keyword-dense, no fluff.
+- NEVER give the full solution — probe recall, not require it.
+- ${modeNote}`;
 
-Generate 5 quiz questions probing understanding of these specific problems. Vary question type (3 short-answer + 2 MCQ).`;
-  }
-  if (task.sourceKind === "pattern" && task.sourcePattern) {
-    return `This week's theme: ${task.sourcePattern}
+  const user = `Mode: ${mode} — ${ctx.title}
+Topic pool: ${topicsText}
 
-The user had no solves yesterday. Generate 5 quiz questions on the fundamental ideas of this pattern — pattern recognition, time/space complexity, when it applies vs when it fails, and 1 MCQ on a classic LeetCode problem that uses this pattern. (3 short-answer + 2 MCQ).`;
-  }
-  return `Generate 5 generic FDE interview warm-up questions on hashmaps and arrays (3 short-answer + 2 MCQ).`;
+Problems in scope:
+${problemsText}
+
+Generate the ${QUIZ_COUNT}-question warm-up as JSON.`;
+
+  const res = await callGroqJSON({
+    apiKey, system, user, maxTokens: 3072, label: "warmup",
+    schemaCheck: (obj) => {
+      if (!obj || !Array.isArray(obj.questions)) return "no questions array";
+      if (obj.questions.length !== QUIZ_COUNT) return `expected ${QUIZ_COUNT} questions, got ${obj.questions.length}`;
+      for (let i = 0; i < QUIZ_COUNT; i++) {
+        const q = obj.questions[i];
+        if (!q?.prompt) return `q${i+1} missing prompt`;
+        if (q.type !== "short" && q.type !== "mcq") return `q${i+1} bad type`;
+        if (q.type === "mcq") {
+          if (!Array.isArray(q.options) || q.options.length !== 4) return `q${i+1} needs 4 options`;
+          if (!/^[A-D]$/i.test(String(q.answer_key || ""))) return `q${i+1} bad answer letter`;
+        } else {
+          if (!q.answer_key) return `q${i+1} missing answer_key`;
+        }
+      }
+      return true;
+    },
+  });
+  if (!res.ok) throw new Error(res.error);
+
+  // Fill in default topics if Groq skipped them
+  const questions = res.data.questions.map((q, i) => ({
+    ...q,
+    topic: String(q.topic || ctx.topicPool[i % Math.max(1, ctx.topicPool.length)] || "general").trim(),
+  }));
+  const topicPool = Array.isArray(res.data.topicPool) && res.data.topicPool.length
+    ? res.data.topicPool.map(String).map(s => s.trim()).filter(Boolean).slice(0, 6)
+    : Array.from(new Set(questions.map(q => q.topic))).slice(0, 6);
+  return { questions, topicPool };
 }
 
 // -------- rendering --------
@@ -293,9 +553,9 @@ function scaffoldHtml() {
     <div class="wu-modal" role="dialog" aria-label="Warm-up quiz">
       <header class="wu-head">
         <div>
-          <div class="wu-eyebrow">⚡ WARM-UP QUIZ · 5 QUESTIONS</div>
+          <div class="wu-eyebrow">⚡ WARM-UP QUIZ · ${QUIZ_COUNT} QUESTIONS</div>
           <h2 id="wu-prog-dots" class="wu-prog">
-            <span class="d"></span><span class="d"></span><span class="d"></span><span class="d"></span><span class="d"></span>
+            ${Array(QUIZ_COUNT).fill('<span class="d"></span>').join("")}
           </h2>
         </div>
         <button class="wu-close" aria-label="Close">✕</button>
@@ -441,15 +701,17 @@ function renderQuestion(q, idx, savedAnswer) {
 
 function renderHint(stage, text) {
   const slot = stage.querySelector(".wu-hint-slot");
-  if (slot) slot.innerHTML = `<div class="wu-hint-box"><b>✦ Hint</b> ${esc(text)}</div>`;
+  if (slot) slot.innerHTML = `<div class="wu-hint-box"><b>✦ Hint</b> ${mdInline(text)}</div>`;
 }
 function renderReveal(stage, text, q) {
   const slot = stage.querySelector(".wu-reveal-slot");
   if (slot) {
-    const key = q.answer_key ? `<div class="wu-key"><b>Key:</b> ${esc(q.answer_key)}</div>` : "";
-    slot.innerHTML = `<div class="wu-reveal-box"><b>Interview answer</b> ${esc(text)} ${key}</div>`;
+    const key = q.answer_key ? `<div class="wu-key"><b>Key:</b> ${mdInline(q.answer_key)}</div>` : "";
+    slot.innerHTML = `<div class="wu-reveal-box"><b>Interview answer</b> ${mdInline(text)} ${key}</div>`;
   }
 }
+
+const mdInline = (text) => renderMarkdown(text || "");
 
 async function askGroqForHint(q) {
   try {
@@ -686,6 +948,50 @@ function injectStyles() {
     .wu-done-ico { font-size: 56px; color: var(--gold); line-height: 1; margin-bottom: 10px; }
     .wu-done-card h3 { margin: 0 0 6px; font-size: 20px; color: var(--ink); }
     .wu-done-card p { margin: 0; color: var(--mut); font-size: 13.5px; }
+
+    /* --- Mode picker --- */
+    .wu-mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0; }
+    .wu-mode-card {
+      display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+      padding: 18px 20px; text-align: left;
+      background: var(--paper); border: 1.5px solid var(--line); border-radius: 12px;
+      cursor: pointer; transition: all .18s;
+      font-family: inherit; color: var(--ink);
+    }
+    .wu-mode-card:not(:disabled):hover { border-color: var(--gold); transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
+    .wu-mode-card.picking { border-color: var(--gold); opacity: .7; }
+    .wu-mode-card:disabled { opacity: .45; cursor: not-allowed; }
+    .wu-mode-ico { font-size: 26px; line-height: 1; color: var(--gold); margin-bottom: 2px; }
+    .wu-mode-title { font: 700 15px/1.2 var(--font-sans); color: var(--ink); }
+    .wu-mode-sub { font: 500 12.5px/1.4 var(--font-sans); color: var(--mut); }
+    .wu-mode-meta { font: 500 11px/1 var(--font-sans); color: var(--mut); margin-top: 6px; letter-spacing: .02em; }
+    @media (max-width: 560px) { .wu-mode-grid { grid-template-columns: 1fr; } }
+
+    /* --- Confidence capture --- */
+    .wu-confidence { text-align: center; padding: 10px 6px; }
+    .wu-conf-ico { font-size: 38px; margin-bottom: 10px; }
+    .wu-conf-title { font: 700 20px/1.2 var(--font-sans); color: var(--ink); margin-bottom: 6px; letter-spacing: -.01em; }
+    .wu-conf-sub { font: 400 13px/1.5 var(--font-sans); color: var(--mut); max-width: 460px; margin: 0 auto 20px; }
+    .wu-conf-sub b { color: var(--ink); font-weight: 700; }
+    .wu-conf-list { display: flex; flex-direction: column; gap: 8px; max-width: 520px; margin: 0 auto 18px; text-align: left; }
+    .wu-conf-row {
+      display: flex; justify-content: space-between; align-items: center; gap: 16px;
+      padding: 12px 16px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 10px;
+    }
+    .wu-conf-topic { font: 600 14px/1.3 var(--font-sans); color: var(--ink); }
+    .wu-conf-stars { display: inline-flex; gap: 4px; }
+    .wu-conf-star {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: transparent; border: none; cursor: pointer;
+      font: 400 18px/1 var(--font-sans); color: color-mix(in oklab, var(--mut) 50%, var(--paper));
+      transition: all .12s;
+    }
+    .wu-conf-star:hover { color: var(--gold); }
+    .wu-conf-star.filled { color: var(--gold); }
+    .wu-conf-footer { margin-top: 10px; }
+    .wu-conf-footer .wu-btn.primary { padding: 11px 24px; font-size: 14px; }
+    .wu-conf-footer .wu-btn.primary:disabled { opacity: .55; cursor: not-allowed; }
   `;
   document.head.appendChild(style);
 }

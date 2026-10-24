@@ -172,6 +172,31 @@ export function openGlossaryModal() {
   scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
 }
 
+// -------- Markdown renderer -------------------------------------------
+// Minimal, XSS-safe inline markdown for Groq output: **bold**, *italic*,
+// `inline code`, [text](url) links, line breaks. Escapes all other HTML
+// first, then re-applies the markdown tokens as proper elements.
+export function renderMarkdown(text) {
+  if (text == null) return "";
+  let s = String(text);
+  // First escape HTML entities (so Groq can't inject markup)
+  s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  // Inline code `foo` — guard first so bold/italic don't munge code content
+  s = s.replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>');
+  // Links [label](http://url) — require http(s) scheme
+  s = s.replace(/\[([^\]]+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Bold **foo** (double-star first so single-* doesn't swallow it)
+  s = s.replace(/\*\*([^*\n]+?)\*\*/g, "<b>$1</b>");
+  // Also __foo__ as bold
+  s = s.replace(/__([^_\n]+?)__/g, "<b>$1</b>");
+  // Italic *foo* and _foo_ — but not if adjacent to word chars (avoid munging snake_case)
+  s = s.replace(/(^|[^\w*])\*([^*\n]+?)\*(?=[^\w*]|$)/g, "$1<i>$2</i>");
+  s = s.replace(/(^|[^\w_])_([^_\n]+?)_(?=[^\w_]|$)/g, "$1<i>$2</i>");
+  // Line breaks: literal \n → <br>
+  s = s.replace(/\n/g, "<br>");
+  return s;
+}
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => (
     { "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }
@@ -183,6 +208,14 @@ function injectStyles() {
   const style = document.createElement("style");
   style.id = "info-styles";
   style.textContent = `
+    /* Markdown inline code — used by renderMarkdown() across all modals */
+    .md-code {
+      padding: 1px 6px; border-radius: 4px;
+      background: color-mix(in oklab, var(--ink) 7%, transparent);
+      border: 1px solid color-mix(in oklab, var(--ink) 10%, transparent);
+      font: 500 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--ink); white-space: nowrap;
+    }
     .info-ic {
       display: inline-flex; align-items: center; justify-content: center;
       width: 15px; height: 15px; padding: 0;

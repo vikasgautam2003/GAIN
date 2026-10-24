@@ -371,8 +371,8 @@ function paintPlan(root) {
                   ? `Review set for <b>tomorrow</b>`
                   : reviewOverride === "in3days"
                     ? `Review set for <b>in 3 days</b>`
-                    : ""}
-              <button class="rs-undo" data-review-undo="${esc(t.ref)}" title="Reset to default">reset</button>
+                    : `Normal queue · spaced-rep by ★ rating`}
+              <button class="rs-undo" data-review-undo="${esc(t.ref)}" title="Clear choice">change</button>
             </div>
           ` : ""}
         </div>
@@ -618,7 +618,7 @@ function paintPlan(root) {
       e.preventDefault();
       e.stopPropagation();
       const dateKey = currentKey();
-      await setReviewOverride(dateKey, btn.dataset.reviewUndo, "default");
+      await setReviewOverride(dateKey, btn.dataset.reviewUndo, "reset");
       paintPlan(root);
     });
   });

@@ -112,6 +112,21 @@ function render() {
           <div id="recent-ledger"></div>
         </div>
 
+        <div class="dash-card dash-card-mentor" id="mentor-tile" role="button" tabindex="0" title="Open the full-screen honest-coach weekly report">
+          <div class="dash-card-head">
+            <h3>Mentor report · this week</h3>
+            <small>Honest coach · ~1 Groq call</small>
+          </div>
+          <div class="mentor-tile-body">
+            <div class="mentor-tile-ico">✦</div>
+            <div class="mentor-tile-text">
+              <b>Read your week like a staff engineer would.</b>
+              <span>Wins, concerns, pattern mastery, next-week focus, and the one big ask — all in one letter.</span>
+            </div>
+            <div class="mentor-tile-arrow">→</div>
+          </div>
+        </div>
+
         <div class="dash-card dash-card-honor">
           <div class="dash-card-head">
             <h3>Honor code</h3>
@@ -321,7 +336,18 @@ function subFor(t) {
 }
 
 function attach(root) {
-  // No module-level state. KPIs link to screens via plain anchors.
+  // Mentor report tile → full-screen honest-coach letter.
+  const openReport = async () => {
+    const { openWeeklyReportCard } = await import("./weeklyReview.js");
+    openWeeklyReportCard();
+  };
+  const tile = root.querySelector("#mentor-tile");
+  if (tile) {
+    tile.addEventListener("click", openReport);
+    tile.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openReport(); }
+    });
+  }
 }
 
 function animateNum(el, to) {
@@ -451,7 +477,17 @@ function styles() {
     .dash-card-target    { grid-column: 3; grid-row: 1; }
     .dash-card-upcoming  { grid-column: 2 / 4; grid-row: 2; }
     .dash-card-recent    { grid-column: 1; grid-row: 3; }
-    .dash-card-honor     { grid-column: 2 / 4; grid-row: 3; }
+    .dash-card-mentor    { grid-column: 2 / 4; grid-row: 3; cursor: pointer; transition: all .18s; }
+    .dash-card-mentor:hover { border-color: var(--gold); transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
+    .dash-card-mentor:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+    .mentor-tile-body { display: flex; align-items: center; gap: 16px; }
+    .mentor-tile-ico { font-size: 32px; color: var(--gold); line-height: 1; }
+    .mentor-tile-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .mentor-tile-text b { font-size: 14px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; }
+    .mentor-tile-text span { font-size: 12.5px; color: var(--mut); line-height: 1.5; }
+    .mentor-tile-arrow { font-size: 22px; color: var(--mut); transition: all .18s; }
+    .dash-card-mentor:hover .mentor-tile-arrow { color: var(--gold); transform: translateX(4px); }
+    .dash-card-honor     { grid-column: 1 / 4; grid-row: 4; }
 
     .dash-card-head {
       display: flex; justify-content: space-between; align-items: baseline;
@@ -515,7 +551,7 @@ function styles() {
       .dash-kpis { grid-template-columns: 1fr 1fr; }
       .dash-grid { grid-template-columns: 1fr; }
       .dash-card-progress, .dash-card-week, .dash-card-target,
-      .dash-card-upcoming, .dash-card-recent, .dash-card-honor { grid-column: 1; grid-row: auto; }
+      .dash-card-upcoming, .dash-card-recent, .dash-card-mentor, .dash-card-honor { grid-column: 1; grid-row: auto; }
     }
   </style>
   `;

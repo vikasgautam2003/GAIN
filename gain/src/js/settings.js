@@ -63,8 +63,9 @@ export default {
                      || (await secure.get("grok_api_key").catch(() => null))
                      || "";
     const existingSerp = (await secure.get("serpapi_key").catch(() => null)) || "";
+    const existingYt   = (await secure.get("youtube_api_key").catch(() => null)) || "";
 
-    root.innerHTML = render(s, existingKey, existingSerp);
+    root.innerHTML = render(s, existingKey, existingSerp, existingYt);
     paintMotivationCount(root);
     paintShopQuoteCount(root);
     attachHandlers(root);
@@ -78,7 +79,7 @@ export default {
   unmount() { if (unsub) { unsub(); unsub = null; } }
 };
 
-function render(s, existingKey, existingSerp = "") {
+function render(s, existingKey, existingSerp = "", existingYt = "") {
   const dyn = (s.grok.dynamicConditions || []).join("\n");
   return `
     <div class="view-inner settings">
@@ -199,24 +200,31 @@ function render(s, existingKey, existingSerp = "") {
 
       <section class="s-card" id="sec-media">
         <div class="s-head">
-          <h3><span class="h-ic">🎬</span>Media <span class="chip-provider">SERPAPI</span></h3>
+          <h3><span class="h-ic">🎬</span>Media <span class="chip-provider">SERPAPI · YOUTUBE</span></h3>
           <span class="s-tag">Optional · unlocks images &amp; YouTube in lessons</span>
         </div>
         <p class="s-note">
           The <b>Learn this topic</b> modal can embed 2 diagrams and 1 YouTube video per lesson,
-          picked by Groq. SerpAPI is used to resolve those queries. If you skip this, lessons still
-          work — you'll just see "Search YouTube for…" fallback links instead of embedded media.
-          Keys are stored in macOS Keychain.
+          picked by Groq. SerpAPI resolves image queries; YouTube Data API resolves the video
+          (and guarantees it's embeddable — zero <b>Error 153</b>). Keys are stored in macOS Keychain.
         </p>
         <div class="grid-3">
           <label class="full">SerpAPI key
             <input id="s-serp-key" type="password" placeholder="paste your SerpAPI key" value="${esc(existingSerp)}" autocomplete="off" />
             <p class="s-sub">Get one at <code>serpapi.com</code>. Free tier: 100 searches/month. Each lesson uses ~3 searches, cached forever per topic.</p>
           </label>
+          <label class="full">YouTube Data API key
+            <input id="s-yt-key" type="password" placeholder="paste your YouTube Data API v3 key" value="${esc(existingYt)}" autocomplete="off" />
+            <p class="s-sub">Get one free at <code>console.cloud.google.com</code> → enable "YouTube Data API v3" → Credentials → API Key. Free tier: 100 lessons/day. When set, GAIN uses this instead of SerpAPI for videos — only <b>embeddable</b> results are returned, so Error 153 never happens.</p>
+          </label>
         </div>
         <div class="row-right" style="margin-top:10px;">
-          <button class="btn-ghost btn-sm" id="btn-test-serp">Test connection</button>
+          <button class="btn-ghost btn-sm" id="btn-test-serp">Test SerpAPI</button>
           <span id="test-serp-note" class="s-tag" style="margin-left:10px;"></span>
+          <button class="btn-ghost btn-sm" id="btn-test-yt" style="margin-left:12px;">Test YouTube API</button>
+          <span id="test-yt-note" class="s-tag" style="margin-left:10px;"></span>
+          <button class="btn-ghost btn-sm" id="btn-clear-lessons" style="margin-left:12px;">Clear cached lessons</button>
+          <span id="clear-lessons-note" class="s-tag" style="margin-left:10px;"></span>
         </div>
       </section>
 
@@ -454,6 +462,9 @@ function render(s, existingKey, existingSerp = "") {
               <button class="bz-btn bz-btn-ghost" id="btn-export-weekly" title="Groq reflects on your last 7 days — stats + 300-word honest mentor's take, saved as .md">
                 <span class="bz-btn-ic">🗓</span> Weekly review (.md)
               </button>
+              <button class="bz-btn bz-btn-primary" id="btn-mentor-report" title="Full-screen honest-coach mentor letter — reads every signal from the last 7 days and gives you specific wins, concerns, next-week focus, and the one big ask">
+                <span class="bz-btn-ic">✦</span> Open mentor report card
+              </button>
             </div>
           </div>
 
@@ -533,7 +544,7 @@ function render(s, existingKey, existingSerp = "") {
       .settings .s-headline {
         text-align: center;
         padding: 40px 24px 24px;
-        max-width: 720px; margin: 0 auto;
+        max-width: 820px; margin: 0 auto;
       }
       .settings .s-eyebrow {
         font: 700 11px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase;
@@ -593,17 +604,26 @@ function render(s, existingKey, existingSerp = "") {
       .settings .stb-chip:hover { color: var(--ink); background: var(--bg); }
       .settings .stb-chip.active { background: var(--ink); color: #fff; }
 
-      /* ===== Sections: NO cards, continuous luxurious scroll ===== */
-      .settings .s-layout { display: block; max-width: 720px; margin: 0 auto; padding: 0 16px; }
+      /* ===== Sections: NO cards, continuous luxurious scroll — WIDER for breathing room ===== */
+      .settings .s-layout { display: block; max-width: 940px; margin: 0 auto; padding: 0 24px; }
       .settings .s-main { min-width: 0; }
       .settings .s-card {
-        padding: 40px 0;
+        padding: 48px 0;
         border-top: 1px solid var(--line);
         animation: rise var(--dur-slow) var(--ease) both;
         position: relative;
       }
-      .settings .s-card:first-of-type { border-top: none; padding-top: 20px; }
-      .settings .s-card:last-of-type  { padding-bottom: 24px; }
+      .settings .s-card:first-of-type { border-top: none; padding-top: 24px; }
+      .settings .s-card:last-of-type  { padding-bottom: 32px; }
+      .settings .s-card label { font-size: 14px; }
+      .settings .s-card input[type="text"],
+      .settings .s-card input[type="password"],
+      .settings .s-card input[type="number"],
+      .settings .s-card input[type="url"],
+      .settings .s-card select,
+      .settings .s-card textarea { min-width: 360px; max-width: 100%; }
+      .settings .s-card .grid-2 { gap: 32px; }
+      .settings .s-card .grid-3 { gap: 28px; }
 
       /* Section header: title + sub-tag UNDERNEATH (not stretched to the right edge) */
       .settings .s-head {
@@ -1226,6 +1246,8 @@ function attachHandlers(root) {
       if (key) await secure.set("groq_api_key", key);
       const serpKey = root.querySelector("#s-serp-key")?.value.trim();
       if (serpKey) await secure.set("serpapi_key", serpKey);
+      const ytKey = root.querySelector("#s-yt-key")?.value.trim();
+      if (ytKey) await secure.set("youtube_api_key", ytKey);
       if (autoSaveNote) {
         autoSaveNote.textContent = `Auto-saved · ${new Date().toLocaleTimeString()}`;
         autoSaveNote.style.color = "var(--green)";
@@ -1254,6 +1276,8 @@ function attachHandlers(root) {
     if (key) await secure.set("groq_api_key", key);
     const serpKey = root.querySelector("#s-serp-key")?.value.trim();
     if (serpKey) await secure.set("serpapi_key", serpKey);
+    const ytKey = root.querySelector("#s-yt-key")?.value.trim();
+    if (ytKey) await secure.set("youtube_api_key", ytKey);
     const note = root.querySelector("#save-note");
     note.textContent = `Saved · ${new Date().toLocaleTimeString()}`;
     note.style.color = "var(--green)";
@@ -1285,6 +1309,46 @@ function attachHandlers(root) {
       noteEl.textContent = `✗ ${e.message || e}`;
       noteEl.style.color = "var(--red)";
     }
+  });
+
+  // YouTube Data API test connection — proves `videoEmbeddable=true` works.
+  root.querySelector("#btn-test-yt")?.addEventListener("click", async () => {
+    const noteEl = root.querySelector("#test-yt-note");
+    const key = root.querySelector("#s-yt-key").value.trim();
+    if (!key) { noteEl.textContent = "Enter a key first."; noteEl.style.color = "var(--red)"; return; }
+    noteEl.textContent = "Testing…"; noteEl.style.color = "var(--mut)";
+    try {
+      await secure.set("youtube_api_key", key);
+      const { youtubeSearch } = await import("./store.js");
+      const res = await youtubeSearch({ query: "system design LRU cache", apiKey: key, maxResults: 5 });
+      if (!res?.ok) throw new Error(res?.error || "YouTube Data API call failed");
+      const json = JSON.parse(res.json);
+      if (json.error) throw new Error(json.error.message || "API error");
+      const hits = Array.isArray(json.items) ? json.items.length : 0;
+      noteEl.textContent = `✓ Connected · ${hits} embeddable videos · Error 153 locked out`;
+      noteEl.style.color = "var(--green)";
+    } catch (e) {
+      noteEl.textContent = `✗ ${e.message || e}`;
+      noteEl.style.color = "var(--red)";
+    }
+  });
+
+  // Clear all cached lesson blobs — forces fresh Groq generation next open.
+  // Does NOT wipe lessonState (passes/bounties stay honored).
+  root.querySelector("#btn-clear-lessons")?.addEventListener("click", () => {
+    const noteEl = root.querySelector("#clear-lessons-note");
+    let n = 0;
+    try {
+      const toDel = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith("gain:lesson:") || k.startsWith("gain:lessonImg:"))) toDel.push(k);
+      }
+      for (const k of toDel) { localStorage.removeItem(k); n++; }
+    } catch (_) {}
+    noteEl.textContent = `✓ Cleared ${n} cached lesson blob${n === 1 ? "" : "s"}. Progress &amp; bounties preserved.`;
+    noteEl.style.color = "var(--green)";
+    setTimeout(() => { noteEl.textContent = ""; }, 4000);
   });
 
   // paste-add motivations
@@ -1432,6 +1496,12 @@ function attachHandlers(root) {
       btn.innerHTML = `✗ ${err.message || err}`;
       setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 3800);
     }
+  });
+
+  // ---- Mentor report card (full-screen, honest-coach letter) ----
+  root.querySelector("#btn-mentor-report")?.addEventListener("click", async () => {
+    const { openWeeklyReportCard } = await import("./weeklyReview.js");
+    openWeeklyReportCard();
   });
 
   // ---- Grimoire export (one .md file of every scrap) ----

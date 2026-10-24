@@ -213,15 +213,18 @@ export function getConfidence(dateKey, ref) {
 }
 
 // --- Review override: user's explicit "when to see this again" choice --
+// Note: "default" is stored as an explicit value (not deleted) so the UI knows
+// the user has acknowledged the prompt. The engine treats "default" the same
+// as missing — falls back to the ★ rating's schedule.
 export async function setReviewOverride(dateKey, ref, choice) {
-  const valid = ["default", "tomorrow", "in3days", "mastered"];
+  const valid = ["default", "tomorrow", "in3days", "mastered", "reset"];
   if (!valid.includes(choice)) return;
   const { updateDayLog } = await import("./store.js");
   await updateDayLog(dl => {
     const d = dl[dateKey];
     if (!d) return;
     d.reviewOverride = d.reviewOverride || {};
-    if (choice === "default") delete d.reviewOverride[ref];
+    if (choice === "reset") delete d.reviewOverride[ref];
     else d.reviewOverride[ref] = choice;
   });
 }

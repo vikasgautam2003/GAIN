@@ -7,6 +7,7 @@
 
 import { getSheets, getDayLog, getSettings, getWallet, callGrok, secure, updateDayLog, updateWallet, KIND_TO_SHEET } from "./store.js";
 import { todayKey, activeKey, priceTask } from "./engine.js";
+import { renderMarkdown } from "./info.js";
 
 const TOPIC_OPTIONS = [
   { kind: "dsa", label: "DSA",            icon: "⚡" },
@@ -209,7 +210,7 @@ function paintResult(scrim, state, callbacks) {
         <span class="sg-section-ic">💡</span>
         <span>Why this one</span>
       </div>
-      <p class="sg-why">${esc(p.why || "")}</p>
+      <p class="sg-why">${renderMarkdown(p.why || "")}</p>
 
       <div class="sg-stats">
         <div class="sg-stat">

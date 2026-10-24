@@ -220,6 +220,58 @@ async fn serp_search(req: SerpRequest) -> Result<SerpResponse, String> {
     Ok(SerpResponse { ok: true, json: Some(text), error: None })
 }
 
+// ------------------- YouTube Data API v3 proxy -------------------
+// Direct Google API hits from the browser work, but we proxy from Rust to
+// keep the API key out of CSP connect-src noise and to add server-side
+// validation. Returns candidates guaranteed-embeddable via
+// `videoEmbeddable=true` so the uploader-disabled-embed error (code 101/150,
+// a.k.a. "153") is impossible.
+
+#[derive(Deserialize)]
+struct YouTubeRequest {
+    api_key: String,
+    query: String,
+    #[serde(default)]
+    max_results: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct YouTubeResponse {
+    ok: bool,
+    json: Option<String>,   // raw JSON string from Google
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn youtube_search(req: YouTubeRequest) -> Result<YouTubeResponse, String> {
+    if req.api_key.trim().is_empty() {
+        return Ok(YouTubeResponse { ok: false, json: None, error: Some("No YouTube Data API key set.".into()) });
+    }
+    let n = req.max_results.unwrap_or(5).clamp(1, 10);
+    let client = reqwest::Client::new();
+    let qs = vec![
+        ("part", "snippet".to_string()),
+        ("q", req.query.clone()),
+        ("type", "video".to_string()),
+        ("videoEmbeddable", "true".to_string()),
+        ("videoDuration", "medium".to_string()),
+        ("maxResults", n.to_string()),
+        ("relevanceLanguage", "en".to_string()),
+        ("safeSearch", "moderate".to_string()),
+        ("key", req.api_key.clone()),
+    ];
+    let res = client.get("https://www.googleapis.com/youtube/v3/search")
+        .query(&qs)
+        .send().await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Ok(YouTubeResponse { ok: false, json: None, error: Some(format!("YouTube Data API {}: {}", status, text)) });
+    }
+    Ok(YouTubeResponse { ok: true, json: Some(text), error: None })
+}
+
 // ------------------- secure keyring -------------------
 
 #[tauri::command]
@@ -292,6 +344,7 @@ pub fn run() {
             copy_into_data,
             call_grok,
             serp_search,
+            youtube_search,
             secure_set,
             secure_get,
             secure_delete,

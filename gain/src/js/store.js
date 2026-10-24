@@ -1126,6 +1126,19 @@ export async function serpSearch({ engine, query, apiKey }) {
   });
 }
 
+// YouTube Data API v3 proxy — guarantees `videoEmbeddable=true` so the
+// uploader-disabled-embed error is structurally impossible.
+export async function youtubeSearch({ query, apiKey, maxResults = 5 }) {
+  const key = apiKey ?? (await secure.get("youtube_api_key"));
+  return invoke("youtube_search", {
+    req: {
+      api_key: key || "",
+      query,
+      max_results: maxResults
+    }
+  });
+}
+
 // Apply a weekly plan — writes each day's tasks into dayLog.assigned so Today picks them up.
 // Also stores the raw plan as weekly_plan.json so the Week view can rehydrate exactly what was saved.
 // Expects shape: { days: [{ date: "YYYY-MM-DD", day, theme, tasks: [{ref, title, kind, minutes, value, sheet, seq}] }] }
@@ -1230,7 +1243,7 @@ async function persistSolutions() {
 window.__GAIN__ = {
   state, getSettings, getSheet, getSheets, getWallet, getDayLog,
   updateSettings, updateWallet, updateDayLog, updateSheetRow,
-  addSheet, removeSheet, callGrok, serpSearch, secure, boot,
+  addSheet, removeSheet, callGrok, serpSearch, youtubeSearch, secure, boot,
   getMotivations, getMotivationCounts, addMotivations, clearUserMotivations,
   getShopQuotes, getShopQuoteCounts, getShopQuote, addShopQuotes, clearUserShopQuotes,
   getRewards, addReward, updateReward, removeReward,
