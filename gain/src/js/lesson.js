@@ -1057,13 +1057,12 @@ async function resolveMedia(scrim, { imageQueries, youtubeQuery }) {
 // runtime errors (region block, age gate, deleted video) are auto-skipped.
 // If every candidate fails, we fall back to a clean "Watch on YouTube ↗" card
 // so the user always has a working path.
-// Plain iframe embed. We tried the IFrame Player API first — but in the Tauri
-// webview `window.location.origin` is `tauri://localhost`, which YouTube rejects
-// as an unapproved origin, so onError fires for ALL candidates and we flip to
-// the fallback card every time. YouTube Data API already filters to embeddable
-// videos at discovery, so most embeds succeed; for the stubborn few, the user
-// gets a visible "Try next" button to cycle manually, plus "Open on YouTube"
-// which hands the URL to the OS browser via the open_url Rust command.
+// Plain iframe embed. With `useHttpsScheme: true` in tauri.conf.json, the
+// webview loads from https://tauri.localhost — YouTube now sees an https
+// Referer and accepts the embed. YouTube Data API's videoEmbeddable=true
+// filter ensures the candidates are embed-allowed; "Try next" lets the user
+// cycle manually if a specific video has runtime issues (region, age gate);
+// "Watch on YouTube" opens in the OS browser as a safety net.
 function renderVideo(slot, { candidates, youtubeQuery, currentIdx = 0 }) {
   const total = candidates.length;
   const current = candidates[currentIdx];
@@ -1585,6 +1584,60 @@ function injectStyles() {
     .lsn-vid-ch { opacity: .75; font-weight: 500; }
 
     /* Final fallback card — zero-broken-player guarantee */
+    /* --- Thumbnail-card UX (replaces broken-in-Tauri iframe embed) --- */
+    .lsn-vid-thumbcard {
+      display: flex; flex-direction: column; width: 100%; height: 100%;
+      background: #000;
+    }
+    .lsn-vid-thumb-link {
+      position: relative; display: block; flex: 1 1 auto; min-height: 0;
+      overflow: hidden; cursor: pointer; text-decoration: none;
+    }
+    .lsn-vid-thumb-img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+      transition: transform .4s ease;
+    }
+    .lsn-vid-thumb-link:hover .lsn-vid-thumb-img { transform: scale(1.03); }
+    .lsn-vid-thumb-overlay {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,.3) 100%);
+      transition: background .25s ease;
+    }
+    .lsn-vid-thumb-link:hover .lsn-vid-thumb-overlay { background: linear-gradient(180deg, rgba(0,0,0,.1) 0%, rgba(0,0,0,.45) 100%); }
+    .lsn-vid-play-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 68px; height: 48px; border-radius: 12px;
+      background: #ff0033; color: #fff;
+      font-size: 24px; line-height: 1;
+      box-shadow: 0 10px 30px rgba(0,0,0,.5);
+      transition: all .22s ease;
+    }
+    .lsn-vid-thumb-link:hover .lsn-vid-play-btn { background: #ff1744; transform: scale(1.08); box-shadow: 0 14px 36px rgba(255,0,51,.4); }
+    .lsn-vid-thumb-badge {
+      position: absolute; top: 10px; right: 10px;
+      padding: 5px 10px; border-radius: 6px;
+      background: rgba(0,0,0,.7); color: #fff;
+      font: 700 10px/1 var(--font-sans); letter-spacing: .08em;
+      backdrop-filter: blur(6px);
+    }
+    .lsn-vid-thumb-meta {
+      padding: 10px 14px 6px;
+      background: #0a0a0a; color: #fff;
+    }
+    .lsn-vid-thumb-title { font: 600 13px/1.4 var(--font-sans); color: #fff; margin-bottom: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .lsn-vid-thumb-channel { font: 500 11.5px/1.3 var(--font-sans); color: color-mix(in oklab, #fff 68%, transparent); }
+    .lsn-vid-controls.static {
+      position: static; opacity: 1; pointer-events: auto;
+      background: #0a0a0a;
+      padding: 8px 14px 12px;
+      display: flex; gap: 8px; align-items: center;
+    }
+    .lsn-vid-controls.static .lsn-vid-ctrl { border-radius: 6px; }
+    .lsn-vid-controls.static .lsn-vid-counter { font-size: 11px; }
+    .lsn-vid-controls.static .lsn-vid-ctrl.lsn-vid-ext { margin-left: auto; background: #ff0033; border-color: #ff0033; color: #fff; }
+    .lsn-vid-controls.static .lsn-vid-ctrl.lsn-vid-ext:hover { background: #e6002e; border-color: #e6002e; }
+
     .lsn-vid-fallback {
       display: flex; flex-direction: column; align-items: stretch; justify-content: center;
       gap: 10px; padding: 24px 28px;
