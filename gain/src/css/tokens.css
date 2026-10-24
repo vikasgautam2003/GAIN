@@ -1,0 +1,242 @@
+/* ---- GAIN design tokens (locked to BUILD_SPEC §5) ---- */
+:root {
+  --bg: #f4f5f7;
+  --paper: #ffffff;
+  --line: #eceef1;
+  --line2: #e3e6ea;
+
+  --blue: #3b64f6;
+  --blue-soft: #eaeffd;
+  --ink: #15181d;
+  --mut: #8b92a1;
+
+  --green: #16a34a;
+  --green-soft: #e7f7ec;
+  --gold: #e3a81a;
+  --gold-soft: #fff6e3;
+  --red: #e2454f;
+
+  --shadow: 0 8px 26px rgba(20, 24, 29, .04);
+  --shadow-lift: 0 14px 40px rgba(20, 24, 29, .08);
+  --shadow-pop: 0 24px 60px rgba(20, 24, 29, .14);
+
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 20px;
+
+  /* 8px spacing scale */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text",
+               "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --dur-fast: 160ms;
+  --dur: 240ms;
+  --dur-slow: 420ms;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --ease-spring: cubic-bezier(.2, 1.4, .3, 1);
+}
+
+/* ===== Jianghu black — the dark theme ===== */
+:root[data-theme="dark"] {
+  --bg: #07080b;
+  --paper: #0f1114;
+  --line: #1a1d22;
+  --line2: #262a30;
+
+  --blue: #6a85ff;
+  --blue-soft: rgba(106, 133, 255, .14);
+  --ink: #fafaf5;
+  --mut: #7a8094;
+
+  --green: #22c55e;
+  --green-soft: rgba(34, 197, 94, .14);
+  --gold: #f0b833;
+  --gold-soft: rgba(240, 184, 51, .14);
+  --red: #ff5a66;
+
+  --shadow: 0 8px 26px rgba(0, 0, 0, .4);
+  --shadow-lift: 0 14px 40px rgba(0, 0, 0, .5);
+  --shadow-pop: 0 24px 60px rgba(0, 0, 0, .6);
+}
+
+/* ===== Dark-mode-only tweaks (component scope) =====
+   Everything above is the token flip. The rules below handle
+   components where a straight flip isn't enough (image frames,
+   row tints that need stronger alpha, inputs, primary CTAs). */
+
+/* Shop product images stay in a white "jewelry case" so photos don't melt into black */
+:root[data-theme="dark"] .shop .card .media,
+:root[data-theme="dark"] .shop .reel-slide .reel-media {
+  background: #fff;
+}
+:root[data-theme="dark"] .shop .card .media img,
+:root[data-theme="dark"] .shop .reel-slide .reel-media img {
+  mix-blend-mode: multiply;   /* still works because the local background is white */
+}
+
+/* Library row tints — bump alpha so colored rows stay legible on #0f1114 */
+:root[data-theme="dark"] .lib tbody tr.r-solved {
+  background: linear-gradient(to right, rgba(34,197,94,.14), rgba(34,197,94,.05) 60%, transparent);
+}
+:root[data-theme="dark"] .lib tbody tr.r-solved:hover {
+  background: linear-gradient(to right, rgba(34,197,94,.22), rgba(34,197,94,.08) 60%, rgba(255,255,255,.02));
+}
+:root[data-theme="dark"] .lib tbody tr.r-again {
+  background: linear-gradient(to right, rgba(255,90,102,.14), transparent 50%);
+}
+:root[data-theme="dark"] .lib tbody tr.r-review {
+  background: linear-gradient(to right, rgba(106,133,255,.14), transparent 50%);
+}
+
+/* Form inputs — raise the fill so they read as "fillable" against paper */
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] .gain-dd .gain-dd-trigger {
+  background: #141720;
+  color: var(--ink);
+  border-color: var(--line2);
+}
+:root[data-theme="dark"] .ai-prompt-wrap,
+:root[data-theme="dark"] .csv-ref-row,
+:root[data-theme="dark"] .sound-slot,
+:root[data-theme="dark"] label.chk,
+:root[data-theme="dark"] .ss-modal footer {
+  background: #141720 !important;
+}
+
+/* The primary dark CTAs should flip to GOLD on dark — our hero accent */
+:root[data-theme="dark"] .btn-primary,
+:root[data-theme="dark"] .cta-primary,
+:root[data-theme="dark"] .st-cta,
+:root[data-theme="dark"] .reel-cta-primary,
+:root[data-theme="dark"] .claim-btn,
+:root[data-theme="dark"] .btn-confirm:not(.ready),
+:root[data-theme="dark"] .shop .st-cta {
+  background: var(--gold);
+  color: #15181d;
+}
+:root[data-theme="dark"] .btn-primary:hover,
+:root[data-theme="dark"] .cta-primary:hover,
+:root[data-theme="dark"] .st-cta:hover,
+:root[data-theme="dark"] .reel-cta-primary:hover {
+  background: #d9a222;
+  color: #15181d;
+}
+
+/* The "status-strip--ready" needs a darker green background in dark */
+:root[data-theme="dark"] .shop .status-strip--ready {
+  background: rgba(34, 197, 94, .08);
+}
+
+/* Code blocks and inline tags */
+:root[data-theme="dark"] code,
+:root[data-theme="dark"] .settings code {
+  background: #1a1d22;
+  color: var(--ink);
+}
+
+/* Scrollbar — subtle on dark */
+:root[data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #262a30; border-radius: 10px; }
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #333842; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;    /* main scrolls, not body */
+}
+
+/* ---- native <select> hidden behind the custom dropdown ---- */
+.gain-dd {
+  display: inline-block; position: relative;
+  min-width: 140px;    /* sensible default when sitting in a toolbar */
+}
+/* When nested inside a form <label>, fill the label's width */
+label > .gain-dd { display: block; width: 100%; }
+.gain-dd .gain-dd-native {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; pointer-events: none; z-index: -1;
+}
+.gain-dd .gain-dd-trigger {
+  display: inline-flex; align-items: center; justify-content: space-between;
+  gap: 10px; width: 100%; cursor: pointer;
+  background: #fff; border: 1px solid var(--line2); border-radius: 10px;
+  padding: 10px 12px; color: var(--ink);
+  font: 500 13px/1.3 var(--font-sans);
+  transition: border-color var(--dur-fast) var(--ease),
+              box-shadow var(--dur-fast) var(--ease),
+              background var(--dur-fast) var(--ease),
+              transform var(--dur-fast) var(--ease);
+}
+.gain-dd .gain-dd-trigger:hover { border-color: var(--blue); background: #fafbfc; }
+.gain-dd .gain-dd-trigger.open,
+.gain-dd .gain-dd-trigger:focus-visible {
+  outline: none; border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-soft);
+}
+.gain-dd .gain-dd-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: left; }
+.gain-dd .gain-dd-placeholder .gain-dd-value { color: var(--mut); }
+.gain-dd .gain-dd-caret {
+  color: var(--mut); font-size: 10px; line-height: 1;
+  transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.gain-dd .gain-dd-trigger.open .gain-dd-caret { transform: rotate(180deg); color: var(--blue); }
+
+/* Panel is appended to <body> so it escapes any clip. */
+.gain-dd-panel {
+  position: absolute; z-index: 500;
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 20px 50px rgba(20, 24, 29, .18);
+  padding: 6px; max-height: 320px; overflow-y: auto; min-width: 160px;
+  opacity: 0; transform: translateY(-6px) scale(.98);
+  transition: opacity 150ms var(--ease), transform 150ms var(--ease);
+  transform-origin: top left;
+}
+.gain-dd-panel.show { opacity: 1; transform: translateY(0) scale(1); }
+.gain-dd-panel.flip-up { transform-origin: bottom left; transform: translateY(6px) scale(.98); }
+.gain-dd-panel.flip-up.show { transform: translateY(0) scale(1); }
+.gain-dd-panel .gain-dd-option {
+  display: block; width: 100%; text-align: left;
+  padding: 9px 12px; border: none; background: transparent;
+  font: 500 13px/1.3 var(--font-sans); color: var(--ink);
+  border-radius: 8px; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.gain-dd-panel .gain-dd-option:hover,
+.gain-dd-panel .gain-dd-option.hover { background: var(--blue-soft); color: var(--blue); }
+.gain-dd-panel .gain-dd-option.selected {
+  background: var(--blue); color: #fff; font-weight: 600;
+}
+.gain-dd-panel .gain-dd-option.selected.hover { background: var(--blue); color: #fff; }
+.gain-dd-panel .gain-dd-option[disabled] { opacity: .4; cursor: not-allowed; }
+
+/* Scrollbar on the panel: slim and branded */
+.gain-dd-panel::-webkit-scrollbar { width: 8px; }
+.gain-dd-panel::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 999px; }
+.gain-dd-panel::-webkit-scrollbar-thumb:hover { background: var(--mut); }
+
+/* reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

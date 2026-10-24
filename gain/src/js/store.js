@@ -1,0 +1,1221 @@
+// Central in-memory store. Loads settings, wallet, dayLog, and CSV sheets.
+// Persists on change (debounced). Everything reads Settings at runtime.
+
+import { parseCSV, serializeCSV } from "./csv.js";
+import { MOTIVATIONS as BANK_MOTIVATIONS } from "./motivations_bank.js";
+import { SHOP_QUOTES as BANK_SHOP_QUOTES } from "./shop_quotes.js";
+
+const invoke = (cmd, args) => window.__TAURI__?.core?.invoke?.(cmd, args)
+  ?? Promise.reject(new Error("Tauri IPC not available"));
+
+const DEFAULT_SETTINGS = {
+  profile: {
+    name: "Vikas",
+    targetRole: "FDE (SaaS + Palantir-style) · 10 LPA+",
+    targetDate: "2027-04-18",
+    weekdayMinutes: 90
+  },
+  grok: {
+    // Despite the field name "grok", the backend now calls Groq (groq.com) — the AI butler.
+    // Keeping the key name for backward compatibility with saved settings.
+    apiKey: "",        // live key is kept in OS keyring via secure_set as "groq_api_key"; this mirrors last-set presence
+    model: "llama-3.3-70b-versatile",
+    temperature: 0.3,
+    masterPrompt:
+`You are GAIN's butler: a ruthless, caring personal FDE interview coach for Vikas,
+a Rocketlane engineer targeting SaaS-product AND Palantir-style Forward Deployed
+Engineer roles (10 LPA+), coding in Java.
+
+MISSION: plan this week's study and price each task so he is 99% interview-ready
+in ~24 weeks. You are fed: his full sheet state (every DSA/SD/INT item with
+Status, Confidence, DateSolved, Pattern, Freq, Role), the current Settings
+including dynamicConditions, and his short prompt for the week.
+
+RULES:
+- Obey every dynamicConditions entry literally. They override defaults.
+- Respect schedule: ~1 core DSA/weekday; prepend a CONF easy problem when a new
+  pattern starts; SD/INT only on configured days; weekends = retries + 1 case study.
+- Prioritise Freq=HIGH patterns and his weak/low-confidence/AGAIN items.
+- Never schedule more than one Hard per day unless asked.
+- Price each task between wallet.taskMin and wallet.taskMax by difficulty, estimated
+  minutes, and importance (hard/graph/DP/new-pattern = higher; quick revision = low).
+- Keep daily load realistic for his weekdayMinutes budget.
+- Output ONLY the JSON contract. No prose outside it.
+TONE for 'reason' fields: terse, direct, no fluff.`,
+    dynamicConditions: []
+  },
+  schedule: {
+    newDsaPerWeekday: 1,
+    sdIntDays: ["Mon", "Thu"],
+    weekendMode: "retries+casestudy",
+    srIntervals: [7, 30],
+    maxTasksPerDay: 5    // hard cap — no overloading, no ripping yourself off
+  },
+  wallet: {
+    taskMin: 20, taskMax: 100,
+    perfectDayBonus: 0,
+    weekBonus: 1000, monthBonus: 3000,
+    streak30: 1500, streak100: 5000,
+    withdrawCapMode: "tasks", withdrawCapValue: null,
+    // Shop tier unlock thresholds (lifetime ₹ earned to unlock)
+    tierUnlocks: { small: 20, medium: 500, large: 2000, mega: 5000 }
+  },
+  animations: { day: "confetti", week: "lottie", month: "lottie", lottie: true, intensity: "normal", style: "confetti" },
+  sound: {
+    on: true,
+    volume: 0.7,
+    // Custom data-URL sounds (user-uploaded). If empty, falls back to assets/sound/*.mp3.
+    customDay: "", customWeek: "", customMonth: "", customEarn: ""
+  },
+  motivation: { tone: "goggins", profanity: true, perDay: 2, footerLine: true },
+  sheets: [
+    { name: "DSA",          file: "01_DSA_SHEET.csv",                 type: "dsa", columnMap: {} },
+    { name: "System Design",file: "02_SYSTEM_DESIGN_SHEET.csv",       type: "sd",  columnMap: {} },
+    { name: "Integrations", file: "03_INTEGRATIONS_PLATFORMS_SHEET.csv", type: "int",  columnMap: {} },
+    { name: "Interview Extras", file: "04_FDE_INTERVIEW_EXTRAS.csv",  type: "ext", columnMap: {} },
+    { name: "SQL",          file: "05_SQL_SHEET.csv",                 type: "sql", columnMap: {} }
+  ],
+  appearance: { accent: "#3b64f6", theme: "light" }
+};
+
+const DEFAULT_WALLET = {
+  earned: 0, spent: 0, available: 0, ledger: [],
+  dailyWithdrawn: {},  // { "2026-10-18": 2 }  task-based cap tracker
+  wishlist: []         // array of reward ids, in chain order
+};
+
+const DEFAULT_DAY_LOG = {};
+
+const DEFAULT_REWARDS = {
+  catalog: []   // seeded from rewards_catalog.csv on first boot
+};
+
+// Canonical type registry — ordered for carousel display. Order matters.
+// Each entry: key (store-token, lowercase), label (display), emoji (fallback art),
+// keywords (title/category hints for the type inferer).
+export const REWARD_TYPES = [
+  { key: "shoes",       label: "Shoes",         emoji: "👟", keywords: ["sneaker","shoe","boot","trainer","loafer"] },
+  { key: "apparel",     label: "Apparel",       emoji: "👕", keywords: ["t-shirt","shirt","jacket","hoodie","boxer","shorts","trouser","pant","sweatshirt","varsity"] },
+  { key: "bag",         label: "Bags",          emoji: "🎒", keywords: ["backpack","duffle","bag","tote","handbag","sling"] },
+  { key: "accessory",   label: "Accessories",   emoji: "✨", keywords: ["keychain","wallet","belt","scarf","sunglass","cap","hat"] },
+  { key: "watches",     label: "Watches",       emoji: "⌚", keywords: ["watch","timepiece","smartwatch"] },
+  { key: "jewelry",     label: "Jewelry",       emoji: "💎", keywords: ["ring","chain","bracelet","earring","necklace","pendant"] },
+  { key: "electronics", label: "Electronics",   emoji: "🎧", keywords: ["headphone","earbud","speaker","tablet","tab","ipad","phone","laptop","console","display"] },
+  { key: "cameras",     label: "Cameras",       emoji: "📷", keywords: ["camera","gopro","dslr","mirrorless","lens"] },
+  { key: "food",        label: "Food & drink",  emoji: "🍜", keywords: ["pizza","chaat","momo","burger","meal","coffee","tea","drink","buffet","gol gappe","pani puri"] },
+  { key: "experience",  label: "Experiences",   emoji: "🎟", keywords: ["concert","event","movie","show","match","ticket","class"] },
+  { key: "travel",      label: "Travel",        emoji: "✈️", keywords: ["trip","ladakh","thailand","goa","bali","vacation","tour","flight","hotel","stay"] },
+  { key: "fitness",     label: "Fitness",       emoji: "🏋", keywords: ["dumbbell","yoga","gym","protein","resistance"] },
+  { key: "wellness",    label: "Wellness",      emoji: "🧘", keywords: ["spa","massage","meditation","retreat","sleep"] },
+  { key: "outdoor",     label: "Outdoor",       emoji: "⛰", keywords: ["camp","trek","hike","tent","outdoor","skateboard","surf"] },
+  { key: "home",        label: "Home",          emoji: "🏠", keywords: ["lamp","chair","desk","mug","cushion","candle","sheet"] },
+  { key: "books",       label: "Books",         emoji: "📚", keywords: ["book","novel","manga","comic","kindle"] },
+  { key: "games",       label: "Games",         emoji: "🎮", keywords: ["game","playstation","xbox","nintendo","board game","chess"] },
+  { key: "music",       label: "Music",         emoji: "🎸", keywords: ["guitar","vinyl","record","piano","keyboard","instrument"] },
+  { key: "art",         label: "Art",           emoji: "🎨", keywords: ["poster","print","sketch","paint","easel","canvas"] },
+  { key: "grooming",    label: "Grooming",      emoji: "✂️", keywords: ["cologne","perfume","trimmer","razor","skin","beard"] },
+  { key: "cars",        label: "Cars",          emoji: "🚗", keywords: ["car","sedan","suv","convertible","supercar"] },
+  { key: "bikes",       label: "Bikes",         emoji: "🏍", keywords: ["bike","motorcycle","cycle","bicycle","harley","ducati"] },
+  { key: "kids",        label: "Kids",          emoji: "🧸", keywords: ["kid","toy","lego","plush","nursery"] },
+  { key: "space",       label: "Space",         emoji: "🚀", keywords: ["telescope","meteorite","astronaut","star","nebula","satellite"] },
+  { key: "custom",      label: "Other",         emoji: "🎁", keywords: [] }
+];
+
+const _TYPE_INDEX = new Map(REWARD_TYPES.map(t => [t.key, t]));
+
+function normalizeType(rawType, category, title) {
+  const direct = String(rawType || "").trim().toLowerCase();
+  if (direct && _TYPE_INDEX.has(direct)) return direct;
+  const cat = String(category || "").trim().toLowerCase();
+  if (cat) {
+    const byLabel = REWARD_TYPES.find(t => t.label.toLowerCase() === cat || t.key === cat);
+    if (byLabel) return byLabel.key;
+    const partial = REWARD_TYPES.find(t => cat.includes(t.key) || t.label.toLowerCase().includes(cat));
+    if (partial) return partial.key;
+  }
+  const t = `${title || ""} ${category || ""}`.toLowerCase();
+  for (const typeDef of REWARD_TYPES) {
+    if (typeDef.keywords?.some(k => t.includes(k))) return typeDef.key;
+  }
+  return "custom";
+}
+
+export function getRewardTypes() { return REWARD_TYPES; }
+
+const DEFAULT_MOTIVATIONS = {
+  // Full seed bank (~250 lines) — ships with the app. User uploads override these entirely.
+  seeds: BANK_MOTIVATIONS,
+  user: []  // added by the user via Settings → Motivation (textarea or CSV upload)
+};
+
+// Murim / jianghu-tone accountability quotes for the Shop. User uploads override these.
+const DEFAULT_SHOP_QUOTES = {
+  seeds: BANK_SHOP_QUOTES,
+  user: []
+};
+
+const state = {
+  settings: structuredClone(DEFAULT_SETTINGS),
+  wallet: structuredClone(DEFAULT_WALLET),
+  dayLog: structuredClone(DEFAULT_DAY_LOG),
+  sheets: {},        // { "DSA": {headers:[], rows:[], file, type} }
+  motivations: structuredClone(DEFAULT_MOTIVATIONS),
+  shopQuotes:  structuredClone(DEFAULT_SHOP_QUOTES),
+  rewards: structuredClone(DEFAULT_REWARDS),
+  quotes: { earn: [], spend: [] },  // populated from JSON banks (Part 3)
+  weeklyPlan: null,   // last saved weekly plan (see applyWeeklyPlan)
+  solutions: {},      // { "DSA#86": "code...", ... } — problem-page solutions keyed by sheet#rowIndex
+  booted: false,
+  listeners: new Set()
+};
+
+// --------- debounced persist ---------
+const timers = {};
+function schedule(key, fn, ms = 400) {
+  if (timers[key]) clearTimeout(timers[key]);
+  timers[key] = setTimeout(() => { timers[key] = null; fn(); }, ms);
+}
+
+async function readIfExists(path) {
+  const exists = await invoke("file_exists", { path }).catch(() => false);
+  if (!exists) return null;
+  return invoke("read_text_file", { path });
+}
+
+async function writeFile(path, contents, backup = true) {
+  return invoke("write_text_file", { path, contents, backup });
+}
+
+// --------- boot ---------
+export async function boot() {
+  if (state.booted) return;
+  // settings
+  try {
+    const raw = await readIfExists("settings.json");
+    if (raw) state.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    // Migration: ensure any newly-added default sheets are present in the user's persisted list.
+    const have = new Set((state.settings.sheets || []).map(x => x.name));
+    for (const def of DEFAULT_SETTINGS.sheets) {
+      if (!have.has(def.name)) state.settings.sheets.push({ ...def });
+    }
+    // Migration: ensure every default tier unlock threshold is present (adds 'mega' for old settings).
+    state.settings.wallet.tierUnlocks = {
+      ...DEFAULT_SETTINGS.wallet.tierUnlocks,
+      ...(state.settings.wallet.tierUnlocks || {})
+    };
+  } catch (e) { console.warn("settings load fallback", e); }
+  // wallet
+  try {
+    const raw = await readIfExists("wallet.json");
+    if (raw) state.wallet = { ...DEFAULT_WALLET, ...JSON.parse(raw) };
+  } catch (e) { console.warn("wallet load fallback", e); }
+  // dayLog
+  try {
+    const raw = await readIfExists("dayLog.json");
+    if (raw) state.dayLog = JSON.parse(raw);
+  } catch (e) { console.warn("dayLog load fallback", e); }
+  // weekly plan (last saved via applyWeeklyPlan)
+  try {
+    const raw = await readIfExists("weekly_plan.json");
+    if (raw) state.weeklyPlan = JSON.parse(raw);
+  } catch (e) { console.warn("weeklyPlan load fallback", e); }
+  // problem-page solutions (keyed by "sheetName#rowIndex")
+  try {
+    const raw = await readIfExists("solutions.json");
+    if (raw) state.solutions = JSON.parse(raw) || {};
+  } catch (e) { console.warn("solutions load fallback", e); }
+  // motivations — seeds always come from the code bank; only `user` persists.
+  try {
+    const raw = await readIfExists("motivations.json");
+    if (raw) {
+      const loaded = JSON.parse(raw);
+      state.motivations = {
+        seeds: DEFAULT_MOTIVATIONS.seeds,                 // always fresh from bank
+        user: Array.isArray(loaded.user) ? loaded.user : []
+      };
+    }
+  } catch (e) { console.warn("motivations load fallback", e); }
+  // shop quotes — same pattern
+  try {
+    const raw = await readIfExists("shop_quotes.json");
+    if (raw) {
+      const loaded = JSON.parse(raw);
+      state.shopQuotes = {
+        seeds: DEFAULT_SHOP_QUOTES.seeds,
+        user: Array.isArray(loaded.user) ? loaded.user : []
+      };
+    }
+  } catch (e) { console.warn("shopQuotes load fallback", e); }
+  // rewards catalog
+  try {
+    const raw = await readIfExists("rewards.json");
+    if (raw) {
+      const loaded = JSON.parse(raw);
+      if (Array.isArray(loaded.catalog)) state.rewards = loaded;
+    }
+  } catch (e) { console.warn("rewards load fallback", e); }
+  // bundled quote banks (seed) — ship with the app, user can edit JSON directly
+  try {
+    const earn = await readIfExists("earn_quotes.json");
+    if (earn) state.quotes.earn = JSON.parse(earn);
+    else state.quotes.earn = DEFAULT_EARN_QUOTES.slice();
+    const spend = await readIfExists("spend_quotes.json");
+    if (spend) state.quotes.spend = JSON.parse(spend);
+    else state.quotes.spend = DEFAULT_SPEND_QUOTES.slice();
+  } catch (e) {
+    state.quotes.earn = DEFAULT_EARN_QUOTES.slice();
+    state.quotes.spend = DEFAULT_SPEND_QUOTES.slice();
+  }
+
+  // sheets — if any configured file is missing but a bundled copy exists, import it on first run
+  await ensureFirstRunImport();
+  for (const sheet of state.settings.sheets) {
+    await loadSheet(sheet);
+  }
+
+  // One-time cleanup: purge legacy stock rewards (ids prefixed "r-", not "rw-").
+  // These were the chips/coffee/book defaults; they're obsolete now that the CSV is the source.
+  const beforeLen = state.rewards.catalog.length;
+  state.rewards.catalog = state.rewards.catalog.filter(r => !/^r-/.test(String(r.id || "")) || /^rw-/.test(String(r.id || "")));
+  if (state.rewards.catalog.length !== beforeLen) {
+    schedule("rewards", persistRewards);
+  }
+
+  // Backfill: any reward without a canonical `type` gets one inferred from category/title.
+  let backfilled = 0;
+  for (const r of state.rewards.catalog) {
+    if (!r.type || !_TYPE_INDEX.has(r.type)) {
+      r.type = normalizeType(r.type, r.category, r.title);
+      backfilled++;
+    }
+  }
+  if (backfilled) schedule("rewards", persistRewards);
+
+  // One-shot bundled catalog seed: if the catalog has no "rw-" prefixed items yet, import the bundled CSV.
+  try {
+    const hasImported = state.rewards.catalog.some(r => String(r.id || "").startsWith("rw-"));
+    if (!hasImported) {
+      const csv = await readIfExists("rewards_catalog.csv");
+      if (csv) {
+        const result = await importRewardsFromCsv(csv, { replace: false });
+        console.log("[store] seeded rewards from bundled CSV", result);
+      }
+    }
+  } catch (e) { console.warn("rewards seed failed", e); }
+
+  // persist defaults so files exist for next boot
+  await persistSettings();
+  await persistWallet();
+  await persistDayLog();
+  await persistMotivations();
+  await persistShopQuotes();
+  await persistRewards();
+  await persistQuotes();
+
+  // Warm the session-secrets cache from keyring on boot so the bot has the key available
+  // immediately on page load (no Test-connection round-trip required). Tries new name first,
+  // falls back to legacy.
+  try {
+    const k = await invoke("secure_get", { key: "groq_api_key" }).catch(() => null)
+           || await invoke("secure_get", { key: "grok_api_key" }).catch(() => null);
+    if (k) _sessionSecrets["groq_api_key"] = k;
+  } catch (_) {}
+
+  // One-time backfill: dayLog contains ticked tasks whose sheet rows never got
+  // Status=SOLVED (bug in an older build where weekly-plan tasks had rowIndex=null).
+  // Walk the whole dayLog once and patch any missing sheet-row updates.
+  await backfillSheetFromDayLog();
+
+  state.booted = true;
+  emit("boot");
+}
+
+async function backfillSheetFromDayLog() {
+  const touched = new Set();
+  // Prefer the title-match since refs can mismatch (DSA#49 may encode LC#49 not Seq=49).
+  function resolveRow(sh, task) {
+    const seqCol = sh.headers.find(h => /^seq$/i.test(h));
+    const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+    // 1) title match first (unambiguous when the title is unique)
+    if (titleCol && task.title) {
+      const needle = String(task.title).trim().toLowerCase();
+      const idx = sh.rows.findIndex(r => String(r[titleCol] || "").trim().toLowerCase() === needle);
+      if (idx >= 0) return idx;
+    }
+    // 2) explicit seq field
+    if (seqCol && task.seq != null) {
+      const idx = sh.rows.findIndex(r => String(r[seqCol]) === String(task.seq));
+      if (idx >= 0) return idx;
+    }
+    // 3) parse `#N` out of the ref
+    if (seqCol && typeof task.ref === "string") {
+      const m = task.ref.match(/#(\d+)$/);
+      if (m) {
+        const idx = sh.rows.findIndex(r => String(r[seqCol]) === m[1]);
+        if (idx >= 0) return idx;
+      }
+    }
+    return null;
+  }
+
+  // Pass A: walk dayLog, write Status/DateSolved for every ticked task.
+  for (const [dateKey, day] of Object.entries(state.dayLog)) {
+    if (!day || !Array.isArray(day.assigned) || !Array.isArray(day.done)) continue;
+    for (const ref of day.done) {
+      const task = day.assigned.find(t => t.ref === ref);
+      if (!task || !task.sheet) continue;
+      const sh = state.sheets[task.sheet];
+      if (!sh) continue;
+      const rowIndex = task.rowIndex ?? resolveRow(sh, task);
+      if (rowIndex == null) continue;
+
+      const statusCol = sh.headers.find(h => /^status$/i.test(h));
+      const dateCol   = sh.headers.find(h => /^(datesolved|datedone)$/i.test(h));
+      const row = sh.rows[rowIndex];
+      let changed = false;
+      if (statusCol && !/^(solved|done)$/i.test(row[statusCol] || "")) {
+        row[statusCol] = "SOLVED";
+        changed = true;
+      }
+      if (dateCol && !row[dateCol]) {
+        row[dateCol] = dateKey;
+        changed = true;
+      }
+      if (changed) touched.add(task.sheet);
+    }
+  }
+
+  // Pass B: heal every SOLVED row that has no DateSolved — fill with today's date.
+  // Without a date, Progress/Pace/BurnUp can't count the solve. This is additive
+  // (we only fill when the field is empty) and doesn't touch any other data.
+  const today = todayKeyLocal();
+  for (const [name, sh] of Object.entries(state.sheets)) {
+    const statusCol = sh.headers.find(h => /^status$/i.test(h));
+    const dateCol   = sh.headers.find(h => /^(datesolved|datedone)$/i.test(h));
+    if (!statusCol || !dateCol) continue;
+    for (const row of sh.rows) {
+      if (/^(solved|done)$/i.test(row[statusCol] || "") && !row[dateCol]) {
+        row[dateCol] = today;
+        touched.add(name);
+      }
+    }
+  }
+
+  // Pass C: heal unlinked tasks (ADHOC or weekly-plan items without sheet/rowIndex).
+  // For each dayLog task whose kind maps to a sheet, find an existing row by title
+  // or create a new one. Then if the task is in `done`, write Status/Date.
+  let dayLogTouched = false;
+  const titleColOf = (sh) => sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+  const findOrCreateRow = (sh, title) => {
+    const titleCol = titleColOf(sh);
+    if (titleCol && title) {
+      const needle = String(title).trim().toLowerCase();
+      const idx = sh.rows.findIndex(r => String(r[titleCol] || "").trim().toLowerCase() === needle);
+      if (idx >= 0) return idx;
+    }
+    // create a new row (inline — no await, we persist all touched sheets below)
+    const row = {};
+    for (const h of sh.headers) row[h] = "";
+    const seqCol = sh.headers.find(h => /^seq$/i.test(h));
+    if (seqCol) {
+      const maxSeq = sh.rows.reduce((m, r) => Math.max(m, Number(r[seqCol]) || 0), 0);
+      row[seqCol] = String(maxSeq + 1);
+    }
+    const statusCol = sh.headers.find(h => /^status$/i.test(h));
+    if (statusCol) row[statusCol] = "TODO";
+    if (titleCol && title) row[titleCol] = title;
+    sh.rows.push(row);
+    return sh.rows.length - 1;
+  };
+  for (const [dateKey, day] of Object.entries(state.dayLog)) {
+    if (!day || !Array.isArray(day.assigned)) continue;
+    for (const task of day.assigned) {
+      if (task.sheet && task.rowIndex != null) continue;
+      const sheetName = KIND_TO_SHEET[task.kind];
+      if (!sheetName) continue;
+      const sh = state.sheets[sheetName];
+      if (!sh || !sh.headers.length) continue;
+      const rowIndex = findOrCreateRow(sh, task.title);
+      task.sheet = sheetName;
+      task.rowIndex = rowIndex;
+      dayLogTouched = true;
+      touched.add(sheetName);
+      // If this task was ticked, make sure Status/Date are set.
+      if ((day.done || []).includes(task.ref)) {
+        const statusCol = sh.headers.find(h => /^status$/i.test(h));
+        const dateCol   = sh.headers.find(h => /^(datesolved|datedone)$/i.test(h));
+        const row = sh.rows[rowIndex];
+        if (statusCol && !/^(solved|done)$/i.test(row[statusCol] || "")) row[statusCol] = "SOLVED";
+        if (dateCol && !row[dateCol]) row[dateCol] = dateKey;
+      }
+    }
+  }
+
+  for (const name of touched) {
+    try { await persistSheet(name); } catch (e) { console.warn("[backfill] persist failed", name, e); }
+  }
+  if (dayLogTouched) {
+    try { await persistDayLog(); } catch (e) { console.warn("[backfill] persistDayLog failed", e); }
+  }
+  if (touched.size) console.log(`[boot] backfill: synced ${touched.size} sheet(s)`);
+}
+
+// Shared mapping — Today's add-task UI uses the same keys so this stays in sync.
+export const KIND_TO_SHEET = {
+  dsa: "DSA",
+  sd:  "System Design",
+  int: "Integrations",
+  ext: "Interview Extras",
+  sql: "SQL",
+};
+
+function todayKeyLocal() {
+  // Mirrors engine.todayKey (19:00 IST rollover). Kept inline so store.js
+  // doesn't need to import engine.js (avoids a circular dependency at boot).
+  const d = new Date();
+  const shifted = new Date(d.getTime() + (5.5 + 5) * 3600 * 1000);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+async function ensureFirstRunImport() {
+  // Try to copy from Desktop/GAIN root if present (the folder that holds the 3 originals).
+  // The user can also use Settings → Import to add more.
+  const candidates = ["/Users/vikasgautam/Desktop/GAIN"];
+  for (const dir of candidates) {
+    try {
+      await invoke("first_run_import", { sourceDir: dir });
+    } catch (_) { /* non-fatal */ }
+  }
+}
+
+async function loadSheet(cfg) {
+  try {
+    const raw = await readIfExists(cfg.file);
+    if (!raw) {
+      state.sheets[cfg.name] = { headers: [], rows: [], file: cfg.file, type: cfg.type, columnMap: cfg.columnMap || {} };
+      return;
+    }
+    const { headers, rows } = parseCSV(raw);
+    state.sheets[cfg.name] = { headers, rows, file: cfg.file, type: cfg.type, columnMap: cfg.columnMap || {} };
+  } catch (e) {
+    console.error("sheet load failed", cfg, e);
+    state.sheets[cfg.name] = { headers: [], rows: [], file: cfg.file, type: cfg.type, columnMap: {}, error: String(e) };
+  }
+}
+
+// --------- public API ---------
+export function getState() { return state; }
+export function getSettings() { return state.settings; }
+export function getSheet(name) { return state.sheets[name]; }
+export function getSheets() { return state.sheets; }
+export function getWallet() { return state.wallet; }
+export function getDayLog() { return state.dayLog; }
+
+export function on(fn) { state.listeners.add(fn); return () => state.listeners.delete(fn); }
+export function emit(ev, payload) { for (const fn of state.listeners) try { fn(ev, payload); } catch (e) { console.error(e); } }
+
+export async function updateSettings(mut) {
+  mut(state.settings);
+  emit("settings");
+  schedule("settings", persistSettings);
+}
+async function persistSettings() {
+  await writeFile("settings.json", JSON.stringify(state.settings, null, 2));
+}
+
+export async function updateWallet(mut) {
+  mut(state.wallet);
+  state.wallet.available = state.wallet.earned - state.wallet.spent;
+  emit("wallet");
+  schedule("wallet", persistWallet);
+}
+async function persistWallet() {
+  await writeFile("wallet.json", JSON.stringify(state.wallet, null, 2));
+}
+
+export async function updateDayLog(mut) {
+  mut(state.dayLog);
+  emit("dayLog");
+  schedule("dayLog", persistDayLog);
+}
+async function persistDayLog() {
+  await writeFile("dayLog.json", JSON.stringify(state.dayLog, null, 2));
+}
+
+export async function updateSheetRow(sheetName, rowIndex, patch) {
+  const sheet = state.sheets[sheetName];
+  if (!sheet) return;
+  Object.assign(sheet.rows[rowIndex], patch);
+  emit("sheet", sheetName);
+  schedule(`sheet:${sheetName}`, () => persistSheet(sheetName));
+}
+
+// Append a new row to a sheet. `patch` is a {colName: value} map.
+// Auto-fills Seq (max+1), defaults Status to TODO, keeps unspecified cols blank.
+// Returns the new row's index.
+export async function addSheetRow(sheetName, patch = {}) {
+  const sheet = state.sheets[sheetName];
+  if (!sheet) throw new Error(`Sheet "${sheetName}" not found`);
+  const row = {};
+  for (const h of sheet.headers) row[h] = "";
+  const seqCol = sheet.headers.find(h => /^seq$/i.test(h));
+  if (seqCol) {
+    const maxSeq = sheet.rows.reduce((m, r) => Math.max(m, Number(r[seqCol]) || 0), 0);
+    row[seqCol] = String(maxSeq + 1);
+  }
+  const statusCol = sheet.headers.find(h => /^status$/i.test(h));
+  if (statusCol) row[statusCol] = "TODO";
+  // Apply user patch — case-insensitive header match so {status:"TODO"} works regardless of case
+  for (const [k, v] of Object.entries(patch)) {
+    const col = sheet.headers.find(h => h.toLowerCase() === String(k).toLowerCase()) || k;
+    row[col] = v == null ? "" : String(v);
+  }
+  sheet.rows.push(row);
+  emit("sheet", sheetName);
+  // Immediate persist (not debounced) so Add is reliable even if user navigates away
+  await persistSheet(sheetName);
+  return sheet.rows.length - 1;
+}
+
+// Delete a row from a sheet by index. Persists immediately.
+export async function deleteSheetRow(sheetName, rowIndex) {
+  const sheet = state.sheets[sheetName];
+  if (!sheet) return;
+  if (rowIndex < 0 || rowIndex >= sheet.rows.length) return;
+  sheet.rows.splice(rowIndex, 1);
+  emit("sheet", sheetName);
+  await persistSheet(sheetName);
+}
+export async function persistSheet(sheetName) {
+  const sheet = state.sheets[sheetName];
+  if (!sheet) return;
+  const text = serializeCSV(sheet.headers, sheet.rows);
+  await writeFile(sheet.file, text);
+}
+
+export async function addSheet(cfg, text) {
+  // cfg: { name, file (basename), type, columnMap }
+  await writeFile(cfg.file, text, false);
+  await updateSettings(s => { s.sheets.push(cfg); });
+  await loadSheet(cfg);
+  emit("sheet:add", cfg.name);
+}
+
+// ---- motivations ----
+// User-uploaded lines take priority. Defaults only fill in when the user has none.
+export function getMotivations() {
+  if (state.motivations.user.length > 0) return [...state.motivations.user];
+  return [...state.motivations.seeds];
+}
+export function getMotivationCounts() {
+  return {
+    seeds: state.motivations.seeds.length,
+    user: state.motivations.user.length,
+    activeSource: state.motivations.user.length > 0 ? "user" : "defaults",
+    activeCount: state.motivations.user.length > 0 ? state.motivations.user.length : state.motivations.seeds.length
+  };
+}
+export async function addMotivations(lines) {
+  const clean = (lines || []).map(l => String(l).trim()).filter(Boolean);
+  if (!clean.length) return 0;
+  const existing = new Set([...state.motivations.seeds, ...state.motivations.user]);
+  const fresh = clean.filter(l => !existing.has(l));
+  state.motivations.user.push(...fresh);
+  emit("motivations");
+  schedule("motivations", persistMotivations);
+  return fresh.length;
+}
+export async function clearUserMotivations() {
+  state.motivations.user = [];
+  emit("motivations");
+  schedule("motivations", persistMotivations);
+}
+async function persistMotivations() {
+  await writeFile("motivations.json", JSON.stringify(state.motivations, null, 2));
+}
+
+// ---- hard reset ----
+// Zeroes out wallet, dayLog, and resets Status/DateSolved/Confidence on every sheet.
+// Does NOT touch: settings, sheet structure, rewards catalog, motivation/shop-quote banks,
+// Grok API key in Keychain.
+export async function resetAllProgress({ resetSheets = true } = {}) {
+  state.wallet = structuredClone(DEFAULT_WALLET);
+  state.dayLog = structuredClone(DEFAULT_DAY_LOG);
+  if (resetSheets) {
+    for (const name in state.sheets) {
+      const sh = state.sheets[name];
+      const statusCol = sh.headers.find(h => /^status$/i.test(h));
+      const dateCol   = sh.headers.find(h => /^(datesolved|datedone)$/i.test(h));
+      const confCol   = sh.headers.find(h => /^confidence$/i.test(h));
+      if (!statusCol && !dateCol && !confCol) continue;
+      for (const r of sh.rows) {
+        if (statusCol) r[statusCol] = "TODO";
+        if (dateCol) r[dateCol] = "";
+        if (confCol) r[confCol] = "";
+      }
+      schedule(`sheet:${name}`, () => persistSheet(name));
+    }
+  }
+  emit("wallet"); emit("dayLog"); emit("sheet");
+  schedule("wallet", persistWallet);
+  schedule("dayLog", persistDayLog);
+}
+
+// ---- shop quotes (murim) ----
+export function getShopQuotes() {
+  if (state.shopQuotes.user.length > 0) return [...state.shopQuotes.user];
+  return [...state.shopQuotes.seeds];
+}
+export function getShopQuoteCounts() {
+  return {
+    seeds: state.shopQuotes.seeds.length,
+    user: state.shopQuotes.user.length,
+    activeSource: state.shopQuotes.user.length > 0 ? "user" : "defaults",
+    activeCount: state.shopQuotes.user.length > 0 ? state.shopQuotes.user.length : state.shopQuotes.seeds.length
+  };
+}
+export function getShopQuote() {
+  const pool = getShopQuotes();
+  if (!pool.length) return "The dao sees. Always.";
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+export async function addShopQuotes(lines) {
+  const clean = (lines || []).map(l => String(l).trim()).filter(Boolean);
+  if (!clean.length) return 0;
+  const existing = new Set([...state.shopQuotes.seeds, ...state.shopQuotes.user]);
+  const fresh = clean.filter(l => !existing.has(l));
+  state.shopQuotes.user.push(...fresh);
+  emit("shopQuotes");
+  schedule("shopQuotes", persistShopQuotes);
+  return fresh.length;
+}
+export async function clearUserShopQuotes() {
+  state.shopQuotes.user = [];
+  emit("shopQuotes");
+  schedule("shopQuotes", persistShopQuotes);
+}
+async function persistShopQuotes() {
+  await writeFile("shop_quotes.json", JSON.stringify(state.shopQuotes, null, 2));
+}
+
+// ---- rewards ----
+export function getRewards() { return state.rewards; }
+
+// ---- wishlist (array of reward ids, in chain order) ----
+export function getWishlist() {
+  const ids = state.wallet.wishlist || [];
+  const cat = state.rewards?.catalog || [];
+  return ids.map(id => cat.find(r => r.id === id)).filter(Boolean);
+}
+export function isWishlisted(id) {
+  return (state.wallet.wishlist || []).includes(id);
+}
+export async function toggleWishlist(id) {
+  await updateWallet(w => {
+    w.wishlist = w.wishlist || [];
+    const i = w.wishlist.indexOf(id);
+    if (i >= 0) w.wishlist.splice(i, 1);
+    else w.wishlist.push(id);
+  });
+}
+export async function reorderWishlist(newIds) {
+  await updateWallet(w => { w.wishlist = newIds.filter(Boolean); });
+}
+
+// ---- momentum: avg ₹ earned per 7-day window, over last N weeks ----
+export function computeMomentum(weeks = 4) {
+  const now = Date.now();
+  const cutoff = now - weeks * 7 * 86400000;
+  const ledger = state.wallet.ledger || [];
+  let total = 0;
+  for (const e of ledger) {
+    if (!e.date || e.amount <= 0) continue;
+    const t = new Date(e.date).getTime();
+    if (!isNaN(t) && t >= cutoff) total += e.amount;
+  }
+  return Math.round(total / weeks);  // per-week average
+}
+// Daily buckets for sparkline (last 7 days of positive earn events)
+export function earningsLast7Days() {
+  const buckets = [0, 0, 0, 0, 0, 0, 0];
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - 6);
+  const ledger = state.wallet.ledger || [];
+  for (const e of ledger) {
+    if (!e.date || e.amount <= 0) continue;
+    const t = new Date(e.date);
+    const diffDays = Math.floor((t - start) / 86400000);
+    if (diffDays >= 0 && diffDays < 7) buckets[diffDays] += e.amount;
+  }
+  return buckets;
+}
+export async function addReward(reward) {
+  state.rewards.catalog.push({ ...reward, id: reward.id || "r-" + Date.now() });
+  emit("rewards"); schedule("rewards", persistRewards);
+}
+export async function updateReward(id, patch) {
+  const r = state.rewards.catalog.find(x => x.id === id);
+  if (!r) return;
+  Object.assign(r, patch);
+  emit("rewards"); schedule("rewards", persistRewards);
+}
+export async function removeReward(id) {
+  state.rewards.catalog = state.rewards.catalog.filter(x => x.id !== id);
+  emit("rewards"); schedule("rewards", persistRewards);
+}
+
+// -------------------------------------------------------------
+// BACKUP: export every piece of user-generated state as a single
+// JSON object. Sheet row text (Problem/Pattern/etc.) is NOT included —
+// those come back from the CSVs on reinstall. Only per-row progress
+// (Status/DateDone/Confidence/Notes/Solution), keyed by Seq, is saved.
+// -------------------------------------------------------------
+const BACKUP_SCHEMA = 2;
+const BACKUP_APP_ID = "com.vikas.gain";
+// Schema 2 adds KeyIdea; also captures full row snapshots so ad-hoc added
+// rows (new Seq numbers) survive a reinstall. Older v1 files still restore.
+const BACKUP_PROGRESS_FIELDS = ["Status", "DateDone", "DateSolved", "Confidence", "Notes", "KeyIdea", "Solution"];
+
+export function exportBackup() {
+  const sheetEdits = {};
+  for (const [name, sh] of Object.entries(state.sheets)) {
+    const seqCol = sh.headers.find(h => /^seq$/i.test(h));
+    if (!seqCol) continue;
+    const progress = [];
+    for (const r of sh.rows) {
+      const entry = { Seq: r[seqCol] };
+      let changed = false;
+      for (const key of BACKUP_PROGRESS_FIELDS) {
+        const col = sh.headers.find(h => h.toLowerCase() === key.toLowerCase());
+        if (col && r[col] != null && String(r[col]).trim() !== "") {
+          entry[key] = r[col];
+          changed = true;
+        }
+      }
+      if (changed) progress.push(entry);
+    }
+    // v2: snapshot headers + full rows so new-Seq rows (ad-hoc additions)
+    // can be recreated on a fresh install where the bundled CSV lacks them.
+    // Shallow copies so later state changes don't mutate the backup.
+    const headers = sh.headers.slice();
+    const rows = sh.rows.map(r => ({ ...r }));
+    if (progress.length || rows.length) {
+      sheetEdits[name] = { file: sh.file, headers, rows, progress };
+    }
+  }
+
+  return {
+    schemaVersion: BACKUP_SCHEMA,
+    appId: BACKUP_APP_ID,
+    exportedAt: new Date().toISOString(),
+    counts: {
+      sheets: Object.keys(sheetEdits).length,
+      rowEdits: Object.values(sheetEdits).reduce((a, s) => a + s.progress.length, 0),
+      ledger: (state.wallet.ledger || []).length,
+      dayLogDays: Object.keys(state.dayLog).length,
+      rewards: state.rewards.catalog.length,
+      wishlist: (state.wallet.wishlist || []).length,
+      userMotivations: (state.motivations.user || []).length,
+      userShopQuotes: (state.shopQuotes.user || []).length
+    },
+    settings:   state.settings,
+    wallet:     state.wallet,
+    dayLog:     state.dayLog,
+    rewards:    state.rewards,
+    motivations:{ user: state.motivations.user || [] },
+    shopQuotes: { user: state.shopQuotes.user || [] },
+    weeklyPlan: state.weeklyPlan || null,
+    solutions:  state.solutions || {},
+    sheetEdits
+  };
+}
+
+// Apply a backup JSON object to current state. Overwrites everything.
+export async function importBackup(data) {
+  if (!data || typeof data !== "object") throw new Error("Not a valid backup file.");
+  if (data.appId !== BACKUP_APP_ID) throw new Error("This file isn't a GAIN backup.");
+  if (data.schemaVersion && data.schemaVersion > BACKUP_SCHEMA) {
+    throw new Error(`Backup is from a newer app version (schema ${data.schemaVersion}). Upgrade the app first.`);
+  }
+
+  // Replace in-memory state wholesale (merged against defaults so new fields survive)
+  if (data.settings)   state.settings   = { ...DEFAULT_SETTINGS, ...data.settings };
+  if (data.wallet)     state.wallet     = { ...DEFAULT_WALLET, ...data.wallet };
+  if (data.dayLog)     state.dayLog     = data.dayLog || {};
+  if (data.rewards && Array.isArray(data.rewards.catalog)) {
+    state.rewards = data.rewards;
+  }
+  if (Array.isArray(data.motivations?.user)) state.motivations.user = data.motivations.user;
+  if (Array.isArray(data.shopQuotes?.user))  state.shopQuotes.user  = data.shopQuotes.user;
+  if (data.weeklyPlan !== undefined)         state.weeklyPlan = data.weeklyPlan;
+  if (data.solutions && typeof data.solutions === "object") state.solutions = data.solutions;
+
+  // Apply per-row sheet progress. v2 backups include full `rows`; v1 only `progress`.
+  // v2 path upserts by Seq (recreating ad-hoc rows that the fresh CSV lacks).
+  const result = { sheetsApplied: 0, rowsApplied: 0, rowsAdded: 0, rowsMissing: 0, sheetsMissing: [] };
+  if (data.sheetEdits && typeof data.sheetEdits === "object") {
+    for (const [name, se] of Object.entries(data.sheetEdits)) {
+      const sheet = state.sheets[name];
+      if (!sheet || !sheet.rows.length) {
+        result.sheetsMissing.push(name);
+        continue;
+      }
+      const seqCol = sheet.headers.find(h => /^seq$/i.test(h));
+      if (!seqCol) { result.sheetsMissing.push(name); continue; }
+      const bySeq = new Map(sheet.rows.map((r, i) => [String(r[seqCol]), i]));
+
+      // v2 path: full-row upsert (recreates ad-hoc rows the fresh CSV lacks).
+      if (Array.isArray(se.rows) && se.rows.length) {
+        for (const backedRow of se.rows) {
+          const seq = backedRow[seqCol];
+          if (seq == null || seq === "") continue;
+          const existingIdx = bySeq.get(String(seq));
+          if (existingIdx != null) {
+            // Row exists — overlay only the user-editable progress fields.
+            // Preserve the CSV's curated columns (title, pattern, difficulty, etc.).
+            for (const key of BACKUP_PROGRESS_FIELDS) {
+              if (backedRow[key] == null || String(backedRow[key]).trim() === "") continue;
+              const col = sheet.headers.find(h => h.toLowerCase() === key.toLowerCase());
+              if (col) sheet.rows[existingIdx][col] = backedRow[key];
+            }
+            result.rowsApplied++;
+          } else {
+            // Row is missing from the fresh CSV — recreate it in full.
+            const newRow = {};
+            for (const h of sheet.headers) {
+              newRow[h] = backedRow[h] != null ? backedRow[h] : "";
+            }
+            sheet.rows.push(newRow);
+            bySeq.set(String(seq), sheet.rows.length - 1);
+            result.rowsAdded++;
+          }
+        }
+      } else {
+        // v1 fallback — Seq-keyed progress overlay only.
+        for (const entry of se.progress || []) {
+          const idx = bySeq.get(String(entry.Seq));
+          if (idx == null) { result.rowsMissing++; continue; }
+          for (const key of BACKUP_PROGRESS_FIELDS) {
+            if (entry[key] == null) continue;
+            const col = sheet.headers.find(h => h.toLowerCase() === key.toLowerCase());
+            if (col) sheet.rows[idx][col] = entry[key];
+          }
+          result.rowsApplied++;
+        }
+      }
+      await persistSheet(name);
+      result.sheetsApplied++;
+    }
+  }
+
+  // Persist every other store to disk
+  await persistSettings();
+  await persistWallet();
+  await persistDayLog();
+  await persistRewards();
+  await persistMotivations();
+  await persistShopQuotes();
+  await persistWeeklyPlan();
+  await persistSolutions();
+
+  // Broadcast so every view repaints
+  emit("boot");
+  emit("settings"); emit("wallet"); emit("dayLog"); emit("rewards"); emit("sheet"); emit("motivations"); emit("shopQuotes"); emit("solutions"); emit("weeklyPlan");
+  return result;
+}
+
+// Wipe the entire catalog. Wishlist is cleared too since the referenced items are gone.
+export async function clearRewardsCatalog() {
+  state.rewards.catalog = [];
+  state.wallet.wishlist = [];
+  emit("rewards"); emit("wallet");
+  schedule("rewards", persistRewards);
+  schedule("wallet",  persistWallet);
+}
+async function persistRewards() {
+  await writeFile("rewards.json", JSON.stringify(state.rewards, null, 2));
+}
+
+// Bulk import a rewards catalog from CSV text. Expected columns (header-driven):
+//   id, name, category, tier, price_inr, store, product_url, image_url, notes
+// Returns { added, updated, skipped }.
+// - Dedupe is by id; existing ids get fields merged (price/image/url/notes/store/category/title/tier).
+// - Rows missing name or price are skipped.
+// - image_url that doesn't start with http(s): is resolved against data/reward-images/<file>.
+export async function importRewardsFromCsv(text, { replace = false } = {}) {
+  const { headers, rows } = parseCSV(text);
+  // Case-insensitive header lookup
+  const hmap = {};
+  for (const h of headers) hmap[h.toLowerCase().trim()] = h;
+  const pick = (row, ...keys) => {
+    for (const k of keys) {
+      const h = hmap[k.toLowerCase()];
+      if (h && row[h] != null && String(row[h]).trim() !== "") return String(row[h]).trim();
+    }
+    return "";
+  };
+
+  if (replace) state.rewards.catalog = [];
+  const existing = new Map(state.rewards.catalog.map(r => [r.id, r]));
+  let added = 0, updated = 0, skipped = 0;
+
+  for (const row of rows) {
+    const id    = pick(row, "id");
+    const name  = pick(row, "name", "title");
+    const price = Number(pick(row, "price_inr", "price")) || 0;
+    const tier  = (pick(row, "tier") || "custom").toLowerCase();
+    const category   = pick(row, "category");
+    const store      = pick(row, "store");
+    const productUrl = pick(row, "product_url", "productUrl", "url", "link");
+    const notes      = pick(row, "notes");
+    let imageUrl     = pick(row, "image_url", "imageUrl", "image");
+    const type       = normalizeType(pick(row, "type", "class", "kind"), category, name);
+    const emoji      = pick(row, "emoji") || _TYPE_INDEX.get(type)?.emoji || tierEmoji(tier, category);
+
+    if (!name || price <= 0) { skipped++; continue; }
+    if (imageUrl && !/^https?:\/\//i.test(imageUrl) && !imageUrl.startsWith("data:")) {
+      imageUrl = `data/reward-images/${imageUrl}`;
+    }
+    const rid = id || `rw-${slug(name)}-${price}`;
+
+    const payload = { id: rid, title: name, price, tier, type, category, store, productUrl, notes, imageUrl, emoji };
+    if (existing.has(rid)) {
+      Object.assign(existing.get(rid), payload);
+      updated++;
+    } else {
+      state.rewards.catalog.push(payload);
+      existing.set(rid, payload);
+      added++;
+    }
+  }
+
+  emit("rewards"); schedule("rewards", persistRewards);
+  return { added, updated, skipped };
+}
+
+function tierEmoji(tier, category) {
+  const c = (category || "").toLowerCase();
+  if (c.includes("food"))        return "🍜";
+  if (c.includes("shoe"))        return "👟";
+  if (c.includes("apparel"))     return "👕";
+  if (c.includes("electronics")) return "🎧";
+  if (c.includes("accessory"))   return "✨";
+  if (c.includes("bag"))         return "🎒";
+  if (c.includes("experience") || c.includes("trip")) return "✈️";
+  if (tier === "small")  return "🪙";
+  if (tier === "medium") return "💎";
+  if (tier === "large")  return "👑";
+  if (tier === "mega")   return "🌟";
+  return "🎁";
+}
+
+function slug(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "item";
+}
+
+// ---- quotes ----
+export function getEarnQuote() {
+  const bank = state.quotes.earn.length ? state.quotes.earn : DEFAULT_EARN_QUOTES;
+  return bank[Math.floor(Math.random() * bank.length)];
+}
+export function getSpendQuote() {
+  const bank = state.quotes.spend.length ? state.quotes.spend : DEFAULT_SPEND_QUOTES;
+  return bank[Math.floor(Math.random() * bank.length)];
+}
+async function persistQuotes() {
+  await writeFile("earn_quotes.json", JSON.stringify(state.quotes.earn, null, 2));
+  await writeFile("spend_quotes.json", JSON.stringify(state.quotes.spend, null, 2));
+}
+
+const DEFAULT_EARN_QUOTES = [
+  "Earned is earned. Nothing you banked today can ever be taken from you.",
+  "That's the chain. Don't break it tomorrow.",
+  "One day closer. Rest, then come back hungry.",
+  "This is what showing up looks like. Keep showing up.",
+  "You traded 90 minutes for a sharper future-you. Fair trade.",
+  "Receipts don't lie. The sheet is the proof.",
+  "Discipline paid. Enjoy it. Then earn tomorrow's.",
+  "That ₹ is a tiny monument to the problem you refused to skip.",
+  "Done is a feeling. Earn it twice tomorrow.",
+  "Future-you just sent a thank-you note."
+];
+
+const DEFAULT_SPEND_QUOTES = [
+  "Earned is earned. Enjoy it. Get back to work.",
+  "You bought this with reps. Spend it with no guilt — then grind.",
+  "Reward collected. Hunger reset. Back to the sheet.",
+  "This isn't a treat. It's a receipt. Keep writing them.",
+  "Spend. Smile. Return.",
+  "Taste the win for 10 minutes. Then open the next problem.",
+  "Rewards are fuel. Don't idle.",
+  "This is the deal: you earn, you spend, you keep going."
+];
+
+export async function removeSheet(name) {
+  await updateSettings(s => { s.sheets = s.sheets.filter(x => x.name !== name); });
+  delete state.sheets[name];
+  emit("sheet:remove", name);
+}
+
+// --------- secure keyring passthrough ---------
+// Session memory cache. Reasons it exists:
+//  1) Unsigned Tauri dev builds sometimes fail silently on keychain set/get on macOS
+//  2) Even when keyring works, it's a round-trip IPC call — the cache is instant
+// The cache is NEVER persisted. Keyring remains the source of truth across restarts.
+const _sessionSecrets = {};
+
+export const secure = {
+  async set(key, value) {
+    _sessionSecrets[key] = value;
+    try { await invoke("secure_set", { key, value }); } catch (e) { console.warn("secure_set failed, using session cache", e); }
+  },
+  async get(key) {
+    if (_sessionSecrets[key] != null) return _sessionSecrets[key];
+    try {
+      const v = await invoke("secure_get", { key });
+      if (v) _sessionSecrets[key] = v;
+      return v;
+    } catch (e) {
+      console.warn("secure_get failed", e);
+      return null;
+    }
+  },
+  async delete(key) {
+    delete _sessionSecrets[key];
+    try { await invoke("secure_delete", { key }); } catch (e) { console.warn("secure_delete failed", e); }
+  }
+};
+
+// --------- Groq (butler) proxy passthrough ---------
+// Reads the key from the macOS Keychain (prefer new "groq_api_key", fall back to legacy "grok_api_key").
+export async function callGrok({ system, user, apiKey, model, temperature, jsonMode }) {
+  const key = apiKey ?? (await secure.get("groq_api_key")) ?? (await secure.get("grok_api_key"));
+  return invoke("call_grok", {
+    req: {
+      api_key: key || "",
+      model: model || state.settings.grok.model,
+      temperature: temperature ?? state.settings.grok.temperature,
+      system: system || state.settings.grok.masterPrompt,
+      user: user || "",
+      json_mode: !!jsonMode
+    }
+  });
+}
+
+// Apply a weekly plan — writes each day's tasks into dayLog.assigned so Today picks them up.
+// Also stores the raw plan as weekly_plan.json so the Week view can rehydrate exactly what was saved.
+// Expects shape: { days: [{ date: "YYYY-MM-DD", day, theme, tasks: [{ref, title, kind, minutes, value, sheet, seq}] }] }
+// Overwrites existing dayLog entries for those dates ONLY if they haven't been ticked yet.
+export async function applyWeeklyPlan(plan, { overwrite = false } = {}) {
+  if (!plan || !Array.isArray(plan.days)) throw new Error("Plan has no days array");
+  const result = { applied: 0, skipped: 0, skippedDates: [] };
+  for (const d of plan.days) {
+    const dateKey = d.date;
+    if (!dateKey) continue;
+    const existing = state.dayLog[dateKey];
+    if (!overwrite && existing && existing.done && existing.done.length > 0) {
+      result.skipped++;
+      result.skippedDates.push(dateKey);
+      continue;
+    }
+    const tasks = (d.tasks || []).map((t, i) => {
+      // Resolve the sheet row index so Today ticks propagate Status → sheet → Progress.
+      // Prefer the explicit seq, then try to parse it out of the ref ("DSA#86" → 86),
+      // then fall back to a case-insensitive title match within the sheet.
+      let rowIndex = null;
+      const sheetName = t.sheet || null;
+      if (sheetName && state.sheets[sheetName]) {
+        const sh = state.sheets[sheetName];
+        const seqCol = sh.headers.find(h => /^seq$/i.test(h));
+        const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+        let seq = t.seq;
+        if (seq == null && typeof t.ref === "string") {
+          const m = t.ref.match(/#(\d+)$/);
+          if (m) seq = Number(m[1]);
+        }
+        if (seqCol && seq != null) {
+          const idx = sh.rows.findIndex(r => String(r[seqCol]) === String(seq));
+          if (idx >= 0) rowIndex = idx;
+        }
+        if (rowIndex == null && titleCol && t.title) {
+          const needle = String(t.title).trim().toLowerCase();
+          const idx = sh.rows.findIndex(r => String(r[titleCol] || "").trim().toLowerCase() === needle);
+          if (idx >= 0) rowIndex = idx;
+        }
+      }
+      return {
+        ref: t.ref || `WK-${dateKey}#${i + 1}`,
+        kind: t.kind || "dsa",
+        title: t.title || `Task ${i + 1}`,
+        pattern: t.pattern || d.theme || "",
+        difficulty: t.difficulty || "",
+        freq: t.freq || "",
+        minutes: Number(t.minutes) || 25,
+        value: Number(t.value) || 20,
+        sheet: sheetName,
+        rowIndex,
+        seq: t.seq ?? null
+      };
+    });
+    state.dayLog[dateKey] = {
+      assigned: tasks,
+      done: [],
+      values: Object.fromEntries(tasks.map(t => [t.ref, t.value])),
+      green: false,
+      dayEarned: 0,
+      weeklyPlan: { title: plan.title || "", theme: d.theme || "" }
+    };
+    result.applied++;
+  }
+
+  // Save the raw plan separately as the week-view's source of truth
+  state.weeklyPlan = {
+    ...plan,
+    savedAt: new Date().toISOString()
+  };
+
+  // Immediate persist — no debouncing. Plan survives app close / navigate-away.
+  await persistDayLog();
+  await persistWeeklyPlan();
+  emit("dayLog");
+  emit("weeklyPlan");
+  return result;
+}
+
+async function persistWeeklyPlan() {
+  await writeFile("weekly_plan.json", JSON.stringify(state.weeklyPlan || null, null, 2));
+}
+
+export function getWeeklyPlan() { return state.weeklyPlan || null; }
+
+// ---- Problem-page solutions (stored outside the CSV so headers aren't mutated) ----
+export function getSolution(sheetName, rowIndex) {
+  return state.solutions[`${sheetName}#${rowIndex}`] || "";
+}
+export async function setSolution(sheetName, rowIndex, text) {
+  const key = `${sheetName}#${rowIndex}`;
+  if (text) state.solutions[key] = text;
+  else delete state.solutions[key];
+  emit("solutions");
+  schedule("solutions", persistSolutions);
+}
+async function persistSolutions() {
+  await writeFile("solutions.json", JSON.stringify(state.solutions, null, 2));
+}
+
+window.__GAIN__ = {
+  state, getSettings, getSheet, getSheets, getWallet, getDayLog,
+  updateSettings, updateWallet, updateDayLog, updateSheetRow,
+  addSheet, removeSheet, callGrok, secure, boot,
+  getMotivations, getMotivationCounts, addMotivations, clearUserMotivations,
+  getShopQuotes, getShopQuoteCounts, getShopQuote, addShopQuotes, clearUserShopQuotes,
+  getRewards, addReward, updateReward, removeReward,
+  getWishlist, isWishlisted, toggleWishlist, reorderWishlist,
+  computeMomentum, earningsLast7Days,
+  getEarnQuote, getSpendQuote
+};

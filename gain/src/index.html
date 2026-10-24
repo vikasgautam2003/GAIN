@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GAIN</title>
+  <link rel="stylesheet" href="css/tokens.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="css/celebrate.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-x">✕</span><span class="brand-name">GAIN</span></div>
+      <nav class="nav" id="nav">
+        <a href="#dashboard" data-route="dashboard"><span class="nav-ic">🏠</span><span class="nav-label">Dashboard</span></a>
+        <a href="#today"     data-route="today"><span class="nav-ic">📅</span><span class="nav-label">Today</span><span class="nav-badge" id="nb-today" hidden></span></a>
+        <a href="#week"      data-route="week"><span class="nav-ic">🗓</span><span class="nav-label">Weekly plan</span></a>
+        <a href="#calendar"  data-route="calendar"><span class="nav-ic">📆</span><span class="nav-label">Calendar</span></a>
+        <a href="#progress"  data-route="progress"><span class="nav-ic">📈</span><span class="nav-label">Progress</span></a>
+        <a href="#library"   data-route="library"><span class="nav-ic">📚</span><span class="nav-label">Library</span><span class="nav-badge nb-split" id="nb-library" hidden></span></a>
+        <a href="#shop"      data-route="shop"><span class="nav-ic">🪙</span><span class="nav-label">Shop</span><span class="nav-badge nb-wish" id="nb-shop" hidden></span></a>
+        <a href="#settings"  data-route="settings"><span class="nav-ic">⚙️</span><span class="nav-label">Settings</span></a>
+      </nav>
+      <div class="credo">DISCIPLINE<br>BUILDS<br>FREEDOM</div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="search">
+          <span>🔍</span>
+          <input id="search" placeholder="Search tasks, topics, or notes…" />
+          <kbd>⌘K</kbd>
+        </div>
+        <div class="streak" id="streak"><span class="flame">🔥</span><span id="streak-n">0</span> day streak</div>
+        <div class="divider"></div>
+        <div class="coin" id="coin"><span class="coin-sym">🪙</span> <b id="coin-n">0</b></div>
+        <button class="btn-primary" id="start-session">Start session ▶</button>
+        <div class="avatar" id="avatar">V</div>
+      </header>
+
+      <main id="view" class="view"></main>
+    </div>
+  </div>
+
+  <!-- Floating Grok butler bot (every screen) -->
+  <button class="bot" id="bot" title="Ask the butler (Groq)" aria-label="AI butler">✦</button>
+  <div class="bot-panel" id="bot-panel" hidden>
+    <header>
+      <strong>AI butler <span class="bot-provider">GROQ</span></strong>
+      <button class="icon-btn" id="bot-close" aria-label="Close">✕</button>
+    </header>
+    <div class="bot-log" id="bot-log"></div>
+    <form class="bot-form" id="bot-form">
+      <input id="bot-input" placeholder="Plan my week, re-price, explain a problem…" autocomplete="off" />
+      <button class="btn-primary" type="submit">Send</button>
+    </form>
+  </div>
+
+  <!-- Celebration overlay root -->
+  <div id="celebrate-root"></div>
+
+  <!-- Vendor libs for celebrations (UMD globals: anime, tsParticles, lottie, Howl/Howler) -->
+  <script src="vendor/anime.min.js"></script>
+  <script src="vendor/tsparticles-fireworks.bundle.min.js"></script>
+  <script src="vendor/lottie_light.min.js"></script>
+  <script src="vendor/howler.min.js"></script>
+
+  <script type="module" src="js/store.js"></script>
+  <script type="module" src="js/router.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
