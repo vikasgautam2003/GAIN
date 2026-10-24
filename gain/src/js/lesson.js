@@ -391,99 +391,145 @@ function imageFigureHTML(q) {
 }
 
 // --------- Quiz gate ---------
+// One-at-a-time quiz. Shows a single question card with 4 options + Prev/Next.
+// On the last question, Next becomes "Submit all". Picking an option auto-advances
+// after a brief highlight (so no click-click-click fatigue). Progress dots at
+// the top show which Qs are answered.
 function paintQuiz(scrim, lesson, ctx, state) {
   const slot = scrim.querySelector("#lsn-quiz-slot");
   if (!slot) return;
+  const total = lesson.quiz.length;
   const attemptNo = state.attempts.length + 1;
   const attemptBanner = attemptNo === MAX_ATTEMPTS
     ? `<div class="lsn-quiz-banner last">Final attempt (${attemptNo} of ${MAX_ATTEMPTS}). A pass here still earns full bounty.</div>`
     : attemptNo > 1
       ? `<div class="lsn-quiz-banner">Attempt ${attemptNo} of ${MAX_ATTEMPTS}.</div>`
       : "";
-  const answers = Array(lesson.quiz.length).fill(null);
+  const answers = Array(total).fill(null);
+  let idx = 0;
 
   slot.innerHTML = `
     ${attemptBanner}
     <div class="lsn-quiz" id="lsn-quiz">
-      ${lesson.quiz.map((q, qi) => `
-        <div class="lsn-qbox" data-qi="${qi}">
-          <div class="lsn-qnum">Q${qi + 1}</div>
-          <div class="lsn-qstem">${renderMarkdown(q.question)}</div>
-          <div class="lsn-qopts">
-            ${q.options.map((opt, oi) => `
-              <button class="lsn-qopt" data-qi="${qi}" data-oi="${oi}">
-                <span class="lsn-qmark">${String.fromCharCode(65 + oi)}</span>
-                <span class="lsn-qtext">${renderMarkdown(opt)}</span>
-              </button>
-            `).join("")}
-          </div>
-          <div class="lsn-qexp" hidden></div>
-        </div>
-      `).join("")}
-      <div class="lsn-quiz-foot">
-        <button class="lsn-btn primary" id="lsn-quiz-submit" disabled>Submit (0/5 answered)</button>
+      <div class="lsn-quiz-dots" id="lsn-quiz-dots">
+        ${Array(total).fill(0).map((_, i) => `<span class="lsn-qdot" data-qdot="${i}"></span>`).join("")}
+      </div>
+      <div id="lsn-quiz-card"></div>
+      <div class="lsn-quiz-nav">
+        <button class="lsn-btn ghost" id="lsn-q-prev" disabled>← Prev</button>
+        <span class="lsn-quiz-counter" id="lsn-quiz-counter">Question 1 of ${total}</span>
+        <button class="lsn-btn primary" id="lsn-q-next" disabled>Next →</button>
       </div>
     </div>
   `;
 
-  slot.querySelectorAll(".lsn-qopt").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const qi = +btn.dataset.qi, oi = +btn.dataset.oi;
-      const box = slot.querySelector(`.lsn-qbox[data-qi="${qi}"]`);
-      box.querySelectorAll(".lsn-qopt").forEach(b => b.classList.remove("picked"));
-      btn.classList.add("picked");
-      answers[qi] = oi;
-      const picked = answers.filter(a => a != null).length;
-      const submit = slot.querySelector("#lsn-quiz-submit");
-      submit.disabled = picked < lesson.quiz.length;
-      submit.textContent = picked < lesson.quiz.length
-        ? `Submit (${picked}/${lesson.quiz.length} answered)`
-        : `Submit answers`;
+  const dotsEl = slot.querySelector("#lsn-quiz-dots");
+  const cardEl = slot.querySelector("#lsn-quiz-card");
+  const counterEl = slot.querySelector("#lsn-quiz-counter");
+  const prevBtn = slot.querySelector("#lsn-q-prev");
+  const nextBtn = slot.querySelector("#lsn-q-next");
+
+  const renderCard = () => {
+    const q = lesson.quiz[idx];
+    cardEl.innerHTML = `
+      <div class="lsn-qbox" data-qi="${idx}">
+        <div class="lsn-qnum">Q${idx + 1}</div>
+        <div class="lsn-qstem">${renderMarkdown(q.question)}</div>
+        <div class="lsn-qopts">
+          ${q.options.map((opt, oi) => `
+            <button class="lsn-qopt ${answers[idx] === oi ? "picked" : ""}" data-oi="${oi}">
+              <span class="lsn-qmark">${String.fromCharCode(65 + oi)}</span>
+              <span class="lsn-qtext">${renderMarkdown(opt)}</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    `;
+    counterEl.textContent = `Question ${idx + 1} of ${total}`;
+    prevBtn.disabled = idx === 0;
+    const isLast = idx === total - 1;
+    const allAnswered = answers.every(a => a != null);
+    nextBtn.textContent = isLast ? (allAnswered ? "Submit answers" : "Submit answers") : "Next →";
+    nextBtn.classList.toggle("submit-ready", isLast && allAnswered);
+    nextBtn.disabled = answers[idx] == null && !isLast;  // next needs this Q answered; submit needs all answered (handled below)
+    if (isLast) nextBtn.disabled = !allAnswered;
+    paintDots();
+
+    cardEl.querySelectorAll(".lsn-qopt").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const oi = +btn.dataset.oi;
+        answers[idx] = oi;
+        cardEl.querySelectorAll(".lsn-qopt").forEach(b => b.classList.remove("picked"));
+        btn.classList.add("picked");
+        paintDots();
+        // Enable Next / Submit immediately.
+        if (idx === total - 1) nextBtn.disabled = !answers.every(a => a != null);
+        else nextBtn.disabled = false;
+      });
     });
+  };
+
+  const paintDots = () => {
+    [...dotsEl.querySelectorAll(".lsn-qdot")].forEach((d, i) => {
+      d.classList.toggle("current", i === idx);
+      d.classList.toggle("done", i !== idx && answers[i] != null);
+    });
+  };
+
+  prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; renderCard(); } });
+  nextBtn.addEventListener("click", async () => {
+    if (idx < total - 1) { idx++; renderCard(); return; }
+    // Last Q — submit
+    await submit();
   });
 
-  slot.querySelector("#lsn-quiz-submit").addEventListener("click", async () => {
+  const submit = async () => {
     const score = answers.reduce((n, a, i) => n + (a === lesson.quiz[i].correctIdx ? 1 : 0), 0);
     const missed = answers
       .map((a, i) => (a !== lesson.quiz[i].correctIdx ? lesson.quiz[i].question : null))
       .filter(Boolean);
 
-    // Lock the UI — show the correct/wrong markers per option, reveal explanations.
-    slot.querySelectorAll(".lsn-qopt").forEach(btn => btn.disabled = true);
-    lesson.quiz.forEach((q, qi) => {
-      const box = slot.querySelector(`.lsn-qbox[data-qi="${qi}"]`);
-      box.querySelectorAll(".lsn-qopt").forEach(btn => {
-        const oi = +btn.dataset.oi;
-        if (oi === q.correctIdx) btn.classList.add("correct");
-        else if (oi === answers[qi]) btn.classList.add("wrong");
-      });
-      const exp = box.querySelector(".lsn-qexp");
-      exp.hidden = false;
-      exp.innerHTML = `<b>${answers[qi] === q.correctIdx ? "✓" : "✗"}</b> ${renderMarkdown(q.explanation || "")}`;
-    });
-
     const passed = score >= QUIZ_PASS;
     const next = { ...state };
     next.attempts.push({ score, at: Date.now(), missed });
     if (passed) next.passed = true;
-
-    // Bounty logic
     const bountyMsg = await applyBountyLogic(next, ctx, { passed, isLastAttempt: next.attempts.length >= MAX_ATTEMPTS });
-
     saveLessonState(ctx.stateKey, next);
 
-    const foot = slot.querySelector(".lsn-quiz-foot");
-    foot.innerHTML = `
-      <div class="lsn-quiz-result ${passed ? "pass" : "fail"}">
-        <div class="lsn-qr-score">${score}/${lesson.quiz.length}</div>
-        <div class="lsn-qr-verdict">${passed ? "Passed · lesson mastered" : (next.attempts.length >= MAX_ATTEMPTS ? "Didn't pass — needs human help" : "Didn't pass — rebuilding in a simpler shape")}</div>
-        ${bountyMsg ? `<div class="lsn-qr-bounty">${esc(bountyMsg)}</div>` : ""}
+    // Replace quiz with per-question review (all 5 at once, correct/wrong revealed) + result card.
+    slot.innerHTML = `
+      <div class="lsn-quiz" id="lsn-quiz">
+        <div class="lsn-quiz-result ${passed ? "pass" : "fail"}">
+          <div class="lsn-qr-score">${score}/${total}</div>
+          <div class="lsn-qr-verdict">${passed ? "Passed · lesson mastered" : (next.attempts.length >= MAX_ATTEMPTS ? "Didn't pass — needs human help" : "Didn't pass — rebuilding in a simpler shape")}</div>
+          ${bountyMsg ? `<div class="lsn-qr-bounty">${esc(bountyMsg)}</div>` : ""}
+        </div>
+        <details class="lsn-quiz-review" ${passed ? "" : "open"}>
+          <summary>Review your answers</summary>
+          ${lesson.quiz.map((q, qi) => `
+            <div class="lsn-qbox review" data-qi="${qi}">
+              <div class="lsn-qnum">Q${qi + 1} · ${answers[qi] === q.correctIdx ? "<span class='qr-ok'>✓</span>" : "<span class='qr-no'>✗</span>"}</div>
+              <div class="lsn-qstem">${renderMarkdown(q.question)}</div>
+              <div class="lsn-qopts">
+                ${q.options.map((opt, oi) => `
+                  <div class="lsn-qopt review ${oi === q.correctIdx ? "correct" : (oi === answers[qi] ? "wrong" : "")}">
+                    <span class="lsn-qmark">${String.fromCharCode(65 + oi)}</span>
+                    <span class="lsn-qtext">${renderMarkdown(opt)}</span>
+                  </div>
+                `).join("")}
+              </div>
+              <div class="lsn-qexp"><b>${answers[qi] === q.correctIdx ? "✓" : "✗"}</b> ${renderMarkdown(q.explanation || "")}</div>
+            </div>
+          `).join("")}
+        </details>
+        <div class="lsn-quiz-foot">
+          ${!passed && next.attempts.length < MAX_ATTEMPTS
+            ? `<button class="lsn-btn primary" id="lsn-quiz-rebuild">↻ Rebuild lesson, simpler</button>`
+            : (!passed ? `<button class="lsn-btn ghost" id="lsn-quiz-retry">Retry later</button>` : "")}
+        </div>
       </div>
-      ${!passed && next.attempts.length < MAX_ATTEMPTS
-        ? `<button class="lsn-btn primary" id="lsn-quiz-rebuild">↻ Rebuild lesson, simpler</button>`
-        : (!passed ? `<button class="lsn-btn ghost" id="lsn-quiz-retry">Retry later</button>` : "")}
     `;
-    foot.querySelector("#lsn-quiz-rebuild")?.addEventListener("click", async () => {
+    slot.querySelector("#lsn-quiz-rebuild")?.addEventListener("click", async () => {
       paintLoading(scrim);
       try {
         const lessonV2 = await fetchLesson({ kind: ctx.kind, title: ctx.title, subtitle: ctx.subtitle, row: ctx.row, plan: ctx.plan, rebuildWeakSpots: missed });
@@ -494,8 +540,10 @@ function paintQuiz(scrim, lesson, ctx, state) {
         paintError(scrim, e.message || String(e));
       }
     });
-    foot.querySelector("#lsn-quiz-retry")?.addEventListener("click", () => ctx.close());
-  });
+    slot.querySelector("#lsn-quiz-retry")?.addEventListener("click", () => ctx.close());
+  };
+
+  renderCard();
 }
 
 // Pay bounty on pass / partial / comeback. Updates ledger, mutates `state`
@@ -918,20 +966,22 @@ async function resolveMedia(scrim, { imageQueries, youtubeQuery }) {
         const slot = fig.querySelector(".lsn-img-slot");
         const imgCacheKey = IMG_CACHE_PREFIX + q.toLowerCase();
         let url = null;
+        let fetchErr = null;
         try {
           const cached = localStorage.getItem(imgCacheKey);
           if (cached) url = cached;
         } catch (_) {}
         if (!url) {
           try {
-            url = await fetchSerpImage(apiKey, q);
+            url = await fetchSerpImage(serpKey, q);
             if (url) { try { localStorage.setItem(imgCacheKey, url); } catch (_) {} }
-          } catch (_) {}
+          } catch (e) { fetchErr = e; }
         }
         if (url && slot) {
           slot.innerHTML = `<img src="${esc(url)}" alt="${esc(q)}" loading="lazy" onerror="this.parentElement.innerHTML='<span class=&quot;lsn-img-fail&quot;>image unavailable</span>'" />`;
         } else if (slot) {
-          slot.innerHTML = `<span class="lsn-img-fail">no image match</span>`;
+          const msg = fetchErr ? esc(String(fetchErr.message || fetchErr)) : "no image match";
+          slot.innerHTML = `<span class="lsn-img-fail" title="${msg}">${fetchErr ? "⚠ " + msg : "no image match"}</span>`;
         }
       })());
     }
@@ -946,7 +996,7 @@ async function resolveMedia(scrim, { imageQueries, youtubeQuery }) {
       if (!ytKey && !serpKey) {
         const q = encodeURIComponent(youtubeQuery);
         slot.innerHTML = `
-          <a class="lsn-vid-nokey" href="https://www.youtube.com/results?search_query=${q}" target="_blank" rel="noopener">
+          <a class="lsn-vid-nokey" href="https://www.youtube.com/results?search_query=${q}" target="_blank" rel="noopener" data-ext>
             <span>Search YouTube for "<b>${esc(youtubeQuery)}</b>"</span>
             <small>Add a YouTube Data API key (free) in Settings — guarantees embeddable results, zero Error 153.</small>
           </a>
@@ -990,7 +1040,7 @@ async function resolveMedia(scrim, { imageQueries, youtubeQuery }) {
       } else {
         const q = encodeURIComponent(youtubeQuery);
         slot.innerHTML = `
-          <a class="lsn-vid-nokey" href="https://www.youtube.com/results?search_query=${q}" target="_blank" rel="noopener">
+          <a class="lsn-vid-nokey" href="https://www.youtube.com/results?search_query=${q}" target="_blank" rel="noopener" data-ext>
             <span>No match found. Search YouTube for "<b>${esc(youtubeQuery)}</b>"</span>
           </a>
         `;
@@ -1007,6 +1057,13 @@ async function resolveMedia(scrim, { imageQueries, youtubeQuery }) {
 // runtime errors (region block, age gate, deleted video) are auto-skipped.
 // If every candidate fails, we fall back to a clean "Watch on YouTube ↗" card
 // so the user always has a working path.
+// Plain iframe embed. We tried the IFrame Player API first — but in the Tauri
+// webview `window.location.origin` is `tauri://localhost`, which YouTube rejects
+// as an unapproved origin, so onError fires for ALL candidates and we flip to
+// the fallback card every time. YouTube Data API already filters to embeddable
+// videos at discovery, so most embeds succeed; for the stubborn few, the user
+// gets a visible "Try next" button to cycle manually, plus "Open on YouTube"
+// which hands the URL to the OS browser via the open_url Rust command.
 function renderVideo(slot, { candidates, youtubeQuery, currentIdx = 0 }) {
   const total = candidates.length;
   const current = candidates[currentIdx];
@@ -1016,57 +1073,27 @@ function renderVideo(slot, { candidates, youtubeQuery, currentIdx = 0 }) {
   }
   const safeTitle = current.title || youtubeQuery;
   const channel = current.channel || "";
-  const playerId = `lsn-ytplayer-${Math.random().toString(36).slice(2, 9)}`;
   slot.innerHTML = `
     <div class="lsn-vid-frame">
-      <div id="${playerId}" class="lsn-vid-iframe"></div>
+      <iframe
+        class="lsn-vid-iframe"
+        src="https://www.youtube-nocookie.com/embed/${esc(current.videoId)}?modestbranding=1&rel=0&playsinline=1"
+        title="${esc(safeTitle)}"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowfullscreen
+        loading="lazy"
+        referrerpolicy="strict-origin-when-cross-origin"></iframe>
     </div>
     <div class="lsn-vid-caption">${esc(safeTitle)}${channel ? ` · <span class="lsn-vid-ch">${esc(channel)}</span>` : ""}</div>
     <div class="lsn-vid-controls">
-      <span class="lsn-vid-counter">${currentIdx + 1} / ${total}${currentIdx > 0 ? ` · auto-skipped ${currentIdx}` : ""}</span>
-      <a class="lsn-vid-ctrl lsn-vid-ext" href="https://www.youtube.com/watch?v=${esc(current.videoId)}" target="_blank" rel="noopener">Open on YouTube ↗</a>
+      <span class="lsn-vid-counter">${currentIdx + 1} / ${total}</span>
+      ${total > 1 ? `<button class="lsn-vid-ctrl" data-next-vid>↷ Not playing? Try next</button>` : ""}
+      <a class="lsn-vid-ctrl lsn-vid-ext" href="https://www.youtube.com/watch?v=${esc(current.videoId)}" target="_blank" rel="noopener" data-ext>Open on YouTube ↗</a>
     </div>
   `;
-
-  ensureYouTubeIframeAPI().then((YT) => {
-    // The div may have been removed before the API loaded (user closed modal).
-    const el = document.getElementById(playerId);
-    if (!el) return;
-    new YT.Player(playerId, {
-      videoId: current.videoId,
-      playerVars: {
-        modestbranding: 1,
-        rel: 0,
-        playsinline: 1,
-        origin: window.location.origin || "null",
-      },
-      events: {
-        onError: (ev) => {
-          // Codes:  2 = invalid id,  5 = HTML5 error,  100 = not found / privated,
-          //       101/150 = embed disabled by uploader (shouldn't fire with Data API).
-          const nextIdx = currentIdx + 1;
-          if (nextIdx < total) {
-            renderVideo(slot, { candidates, youtubeQuery, currentIdx: nextIdx });
-          } else {
-            renderVideoFallback(slot, { candidates, youtubeQuery });
-          }
-        },
-      },
-    });
-  }).catch(() => {
-    // API script couldn't load (offline, CSP). Fall back to a plain iframe
-    // so the user still gets a chance to watch; the fallback card picks up
-    // if even that fails.
-    const el = document.getElementById(playerId);
-    if (!el) return;
-    el.outerHTML = `<iframe
-      class="lsn-vid-iframe"
-      src="https://www.youtube-nocookie.com/embed/${esc(current.videoId)}?modestbranding=1&rel=0"
-      title="${esc(safeTitle)}"
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-      allowfullscreen
-      loading="lazy"
-      referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+  slot.querySelector("[data-next-vid]")?.addEventListener("click", () => {
+    const nextIdx = (currentIdx + 1) % total;
+    renderVideo(slot, { candidates, youtubeQuery, currentIdx: nextIdx });
   });
 }
 
@@ -1080,8 +1107,8 @@ function renderVideoFallback(slot, { candidates, youtubeQuery }) {
       <div class="lsn-vid-fb-title">Couldn't embed any of the ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}.</div>
       <div class="lsn-vid-fb-sub">Open the top pick on YouTube — same video, bigger window, no embed restrictions.</div>
       <div class="lsn-vid-fb-actions">
-        ${first ? `<a class="lsn-vid-fb-primary" href="https://www.youtube.com/watch?v=${esc(first.videoId)}" target="_blank" rel="noopener">▶ Watch "${esc(first.title || youtubeQuery)}" on YouTube ↗</a>` : ""}
-        <a class="lsn-vid-fb-secondary" href="https://www.youtube.com/results?search_query=${searchQ}" target="_blank" rel="noopener">Browse more results for "${esc(youtubeQuery)}"</a>
+        ${first ? `<a class="lsn-vid-fb-primary" href="https://www.youtube.com/watch?v=${esc(first.videoId)}" target="_blank" rel="noopener" data-ext>▶ Watch "${esc(first.title || youtubeQuery)}" on YouTube ↗</a>` : ""}
+        <a class="lsn-vid-fb-secondary" href="https://www.youtube.com/results?search_query=${searchQ}" target="_blank" rel="noopener" data-ext>Browse more results for "${esc(youtubeQuery)}"</a>
       </div>
     </div>
   `;
@@ -1112,10 +1139,58 @@ function ensureYouTubeIframeAPI() {
 
 // SerpAPI calls go through the Rust proxy because the public endpoint doesn't
 // send CORS headers for browser origins. serpSearch() in store.js wraps invoke.
+//
+// Bulletproof wrapper: 2 retries on transient failure, validates JSON shape,
+// surfaces SerpAPI-level errors (quota, bad key) explicitly, logs each attempt.
 async function callSerp(engine, query, apiKey) {
-  const res = await serpSearch({ engine, query, apiKey });
-  if (!res || !res.ok) throw new Error(res?.error || "SerpAPI call failed");
-  return JSON.parse(res.json);
+  if (!apiKey) throw new Error("No SerpAPI key set.");
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await serpSearch({ engine, query, apiKey });
+      if (!res) throw new Error("empty response");
+      if (!res.ok) throw new Error(res.error || "transport failed");
+      let json;
+      try { json = JSON.parse(res.json); }
+      catch (e) { throw new Error(`malformed JSON (${e.message})`); }
+      // SerpAPI returns HTTP 200 with a top-level `error` field for
+      // quota-exhausted or bad-key failures — these are NOT transient, so we
+      // don't retry.
+      if (json.error) {
+        const msg = String(json.error);
+        // "Your searches have run out" / "Invalid API key" are permanent for this call.
+        if (/searches|key|credit|quota|unauthorized|invalid/i.test(msg)) {
+          throw Object.assign(new Error(`SerpAPI: ${msg}`), { permanent: true });
+        }
+        throw new Error(`SerpAPI: ${msg}`);
+      }
+      return json;
+    } catch (e) {
+      lastErr = e;
+      if (e.permanent) throw e;  // no point retrying
+      console.warn(`[serp:${engine}] attempt ${attempt} — ${e.message || e}`);
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, 400 * attempt));  // 400ms, 800ms
+      }
+    }
+  }
+  throw lastErr || new Error("SerpAPI exhausted retries");
+}
+
+// Pick the most reliable embeddable image URL from a SerpAPI result item.
+// Order of preference:
+//   1. thumbnail (Google-cached, always https, always fast)
+//   2. original — only if https (CSP blocks http)
+//   3. source + thumbnail hybrid (some entries have only one)
+function pickImageUrl(r) {
+  if (!r) return null;
+  const t = r.thumbnail;
+  if (t && /^https:/.test(t)) return t;
+  const o = r.original;
+  if (o && /^https:/.test(o)) return o;
+  const s = r.source;
+  if (s && /^https:/.test(s) && /\.(jpg|jpeg|png|gif|webp|svg)/i.test(s)) return s;
+  return null;
 }
 
 async function fetchSerpImage(apiKey, query) {
@@ -1123,8 +1198,8 @@ async function fetchSerpImage(apiKey, query) {
   const list = Array.isArray(json.images_results) ? json.images_results : [];
   if (!list.length) return null;
   for (const r of list) {
-    const u = r.original || r.thumbnail;
-    if (u && /^https?:/.test(u)) return u;
+    const u = pickImageUrl(r);
+    if (u) return u;
   }
   return null;
 }
@@ -1803,6 +1878,33 @@ function injectStyles() {
     .lsn-qr-score { font: 800 28px/1 var(--font-sans); color: var(--ink); letter-spacing: -.02em; margin-bottom: 4px; }
     .lsn-qr-verdict { font: 600 13px/1.4 var(--font-sans); color: var(--ink); margin-bottom: 6px; }
     .lsn-qr-bounty { font: 500 12px/1.4 var(--font-sans); color: var(--mut); }
+
+    /* --- Quiz v2: one-at-a-time with Prev / Next --- */
+    .lsn-quiz-dots { display: flex; justify-content: center; gap: 6px; margin: 4px 0 14px; }
+    .lsn-qdot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: color-mix(in oklab, var(--mut) 32%, var(--paper));
+      border: 1px solid var(--line);
+      transition: all .2s;
+    }
+    .lsn-qdot.done { background: var(--green); border-color: var(--green); }
+    .lsn-qdot.current { background: var(--blue, #3870ff); border-color: var(--blue, #3870ff); width: 28px; border-radius: 5px; }
+    .lsn-quiz-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+    .lsn-quiz-counter { font: 500 12px/1 var(--font-sans); color: var(--mut); letter-spacing: .02em; }
+    .lsn-btn#lsn-q-next.submit-ready { background: var(--green); border-color: var(--green); }
+    .lsn-btn#lsn-q-next.submit-ready:hover { filter: brightness(1.08); }
+    .lsn-quiz-review { margin-top: 14px; }
+    .lsn-quiz-review summary { cursor: pointer; font: 600 13px/1 var(--font-sans); color: var(--ink); padding: 10px 12px; background: var(--bg); border-radius: 8px; }
+    .lsn-quiz-review summary::marker { color: var(--mut); }
+    .lsn-quiz-review .lsn-qbox.review { margin-top: 10px; }
+    .lsn-quiz-review .lsn-qbox.review .qr-ok { color: var(--green); }
+    .lsn-quiz-review .lsn-qbox.review .qr-no { color: var(--red); }
+    .lsn-qopt.review { pointer-events: none; cursor: default; }
+    .lsn-qopt.review:hover { background: var(--bg); border-color: var(--line); }
+    .lsn-qopt.review.correct { background: color-mix(in oklab, var(--green) 14%, var(--paper)); border-color: var(--green); }
+    .lsn-qopt.review.wrong { background: color-mix(in oklab, var(--red) 10%, var(--paper)); border-color: var(--red); }
+    .lsn-qopt.review.correct .lsn-qmark { background: var(--green); color: #fff; border-color: var(--green); }
+    .lsn-qopt.review.wrong .lsn-qmark { background: var(--red); color: #fff; border-color: var(--red); }
   `;
   document.head.appendChild(style);
 }

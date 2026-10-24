@@ -272,6 +272,31 @@ async fn youtube_search(req: YouTubeRequest) -> Result<YouTubeResponse, String> 
     Ok(YouTubeResponse { ok: true, json: Some(text), error: None })
 }
 
+// ------------------- open external URL -------------------
+// Tauri's webview blocks `target="_blank"` navigation. We hand external URLs
+// off to the OS instead — macOS `open`, Linux `xdg-open`, Windows `start`.
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    // Allowlist http/https only — never shell out arbitrary strings.
+    let u = url.trim();
+    if !(u.starts_with("https://") || u.starts_with("http://")) {
+        return Err(format!("Only http/https URLs allowed, got: {}", u));
+    }
+    #[cfg(target_os = "macos")]
+    let (cmd, args): (&str, Vec<&str>) = ("open", vec![u]);
+    #[cfg(target_os = "windows")]
+    let (cmd, args): (&str, Vec<&str>) = ("cmd", vec!["/C", "start", "", u]);
+    #[cfg(target_os = "linux")]
+    let (cmd, args): (&str, Vec<&str>) = ("xdg-open", vec![u]);
+
+    std::process::Command::new(cmd)
+        .args(&args)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ------------------- secure keyring -------------------
 
 #[tauri::command]
@@ -345,6 +370,7 @@ pub fn run() {
             call_grok,
             serp_search,
             youtube_search,
+            open_url,
             secure_set,
             secure_get,
             secure_delete,

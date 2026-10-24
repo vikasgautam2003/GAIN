@@ -8,6 +8,30 @@ import { SHOP_QUOTES as BANK_SHOP_QUOTES } from "./shop_quotes.js";
 const invoke = (cmd, args) => window.__TAURI__?.core?.invoke?.(cmd, args)
   ?? Promise.reject(new Error("Tauri IPC not available"));
 
+// Opens http(s) URLs in the system browser. Tauri's webview blocks
+// target="_blank" so every external link should go through this.
+export async function openExternal(url) {
+  try {
+    await invoke("open_url", { url });
+  } catch (e) {
+    console.warn("open_url failed:", e);
+  }
+}
+
+// One-time delegate: any <a data-ext href="https://..."> click opens via `open_url`
+// instead of trying to navigate the webview.
+if (typeof document !== "undefined" && !document.__gainExtWired) {
+  document.__gainExtWired = true;
+  document.addEventListener("click", (e) => {
+    const a = e.target?.closest?.("a[data-ext]");
+    if (!a) return;
+    const href = a.getAttribute("href");
+    if (!href || !/^https?:\/\//i.test(href)) return;
+    e.preventDefault();
+    openExternal(href);
+  }, true);
+}
+
 const DEFAULT_SETTINGS = {
   profile: {
     name: "Vikas",
