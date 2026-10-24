@@ -240,3 +240,33 @@ label > .gain-dd { display: block; width: 100%; }
     transition-duration: .01ms !important;
   }
 }
+
+/* ---- Global transparent/overlay scrollbars ---- */
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover, *:focus-within {
+  scrollbar-color: color-mix(in oklab, var(--mut) 35%, transparent) transparent;
+}
+/* WebKit (Chromium / Tauri's wry) */
+*::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+*::-webkit-scrollbar-track { background: transparent; border: none; }
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background-clip: padding-box;
+  transition: background .18s ease;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--mut) 35%, transparent);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:active {
+  background: color-mix(in oklab, var(--mut) 65%, transparent);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner { background: transparent; }

@@ -2,7 +2,12 @@
 // Daily engine lives in engine.js; full celebration + add-task in Part 3.
 
 import { getSettings, getSheets, getDayLog, updateWallet, getWallet, on, getMotivations, updateSheetRow } from "./store.js";
-import { ensureDailyPlan, tickTask, untickTask, todayKey, calendarKey, activeKey, nextDayKey, hoursToRollover, isGreenWeek, isGreenMonth, wasWeekFired, wasMonthFired, markWeekFired, markMonthFired, setConfidence, getConfidence } from "./engine.js";
+import { ensureDailyPlan, tickTask, untickTask, todayKey, calendarKey, activeKey, nextDayKey, hoursToRollover, isGreenWeek, isGreenMonth, wasWeekFired, wasMonthFired, markWeekFired, markMonthFired, setConfidence, getConfidence, setReviewOverride, getReviewOverride, capTaskValue, maybeFirePerfectWeek, carryOverUnfinished } from "./engine.js";
+import { tryOpenRecap } from "./recap.js";
+import { ensureWarmupTask, openWarmupQuiz } from "./warmup.js";
+import { openLessonModal } from "./lesson.js";
+import { openSuggestModal } from "./suggest.js";
+import { infoIcon } from "./info.js";
 import { fireDaySecured, fireWeekGodly, fireMonthLegend, fireTaskBagged } from "./celebrate.js";
 
 function pickRandom() {
@@ -27,6 +32,11 @@ export default {
     // so the Today view flips to tomorrow instantly after the last tick.
     await ensureDailyPlan(todayKey());
     if (activeKey() !== todayKey()) await ensureDailyPlan(activeKey());
+    // Phase 8 — carry over any undone tasks from yesterday (debounced per-day)
+    await carryOverUnfinished(todayKey());
+    // Warm-up quiz slot — first row of today's plan, Groq-generated from yesterday
+    await ensureWarmupTask(todayKey());
+    await ensureWarmupTask(activeKey());
 
     const dateStr = new Date().toLocaleDateString(undefined, {
       weekday: "short", day: "2-digit", month: "short"
@@ -103,7 +113,10 @@ function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
             <div class="plan-dots"><span></span><span></span><span></span></div>
             <div class="plan-head">
               <div>
-                <h2 class="plan-title">Today's plan</h2>
+                <h2 class="plan-title">
+                  <span id="plan-title-text">Today's plan</span>
+                  <button class="hist-btn" id="hist-btn" title="View a past day">📅</button>
+                </h2>
                 <p class="plan-sub" id="plan-sub">Loading…</p>
               </div>
               <div class="plan-meta">
@@ -117,6 +130,32 @@ function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
               </div>
             </div>
             <div class="plan-rows" id="plan-rows"></div>
+            <div class="suggest-row" id="suggest-row">
+              <button class="suggest-btn" id="suggest-btn" title="Groq picks a question from your sheet based on today's progress">
+                <span class="sb-ic">✦</span>
+                <span class="sb-text">Suggest another task</span>
+                <small class="sb-hint">Groq picks from your sheet</small>
+              </button>
+              <div class="more-wrap">
+                <button class="more-btn" id="more-btn" title="More actions" aria-haspopup="true" aria-expanded="false">⋯</button>
+                <div class="more-pop" id="more-pop" hidden role="menu">
+                  <button class="more-item" data-more="redo" role="menuitem">
+                    <span class="mi-ic">↻</span>
+                    <span class="mi-main">
+                      <b>Add a REDO question</b>
+                      <small>Weakest-confidence past solve, auto-picked</small>
+                    </span>
+                  </button>
+                  <button class="more-item" data-more="lcpaste" role="menuitem">
+                    <span class="mi-ic mi-ic-lc">LC</span>
+                    <span class="mi-main">
+                      <b>Paste a LeetCode URL</b>
+                      <small>Groq extracts title + pattern + difficulty</small>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
             <div class="add-row">
               <button class="plus" id="add-task-toggle" aria-label="Task options" aria-expanded="false" title="Options · minutes, bounty, kind, status">+</button>
               <input id="add-task-input" placeholder="Add a one-off task for today…" />
@@ -207,10 +246,22 @@ function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
   `;
 }
 
+// Module state: if non-null, paintPlan shows this specific day (user navigated
+// to a past day via the History dropdown). Null = use activeKey() normally.
+let viewedOverride = null;
+function currentKey() { return viewedOverride || activeKey(); }
+
 function paintPlan(root) {
-  const dateKey = activeKey();
+  const dateKey = currentKey();
   const day = getDayLog()[dateKey];
-  if (!day) return;
+  if (!day) {
+    if (viewedOverride) {
+      // Nothing to show for the picked day — fall back to today
+      viewedOverride = null;
+      return paintPlan(root);
+    }
+    return;
+  }
 
   const rowsEl = root.querySelector("#plan-rows");
   const subEl = root.querySelector("#plan-sub");
@@ -228,19 +279,61 @@ function paintPlan(root) {
   rowsEl.innerHTML = day.assigned.map(t => {
     const done = day.done.includes(t.ref);
     const rating = done ? (day.confidence?.[t.ref] ?? null) : null;
-    const needsRating = done && rating == null;  // "capture state"
+    const needsRating = done && rating == null && t.kind !== "warmup";  // quiz doesn't rate
     const isRevisit = t.kind === "revisit";
+    const isWarmup = t.kind === "warmup";
     const isNewStudy = ["dsa", "sd", "int", "ext", "sql"].includes(t.kind) && !isRevisit;
-    const kindPill = isRevisit
-      ? `<span class="k-pill k-redo" title="Spaced-repetition revisit — lock memory in">↻ REDO</span>`
-      : isNewStudy
-        ? `<span class="k-pill k-new" title="New problem">✦ NEW</span>`
-        : "";
+    const isSuggested = !!t.suggested;
+    const isCarried = !!t.carried;
+    const reviewOverride = day.reviewOverride?.[t.ref];
+    // Show review-strip right after rating is captured, until user picks an override.
+    const showReviewStrip = done && rating != null && !reviewOverride && t.sheet && t.rowIndex != null && !isWarmup;
+    const kindPill = isCarried
+      ? `<span class="k-pill k-carried" title="Rolled over from yesterday because it was undone at 7 PM IST">⤼ CARRIED</span>`
+      : isRevisit
+        ? `<span class="k-pill k-redo" title="Spaced-repetition revisit — lock memory in">↻ REDO</span>`
+        : isSuggested
+          ? `<span class="k-pill k-suggested" title="Groq-suggested task">✦ SUGGESTED</span>`
+          : isNewStudy
+            ? `<span class="k-pill k-new" title="New problem">✦ NEW</span>`
+            : isWarmup
+              ? `<span class="k-pill k-warmup" title="5-question Groq recall drill">⚡ WARM-UP</span>`
+              : "";
+    // Special warm-up card — gradient background, "Start →" instead of checkbox
+    if (isWarmup) {
+      const sourceText = done
+        ? "Completed · brain primed"
+        : `5 recall Qs · ${esc(t.sourceLabel || "yesterday's work")} · ~5 min`;
+      return `
+        <div class="task-row warmup alive ${done ? "done" : ""}" data-ref="${esc(t.ref)}">
+          <div class="wu-card-ico"><span class="wu-bolt">⚡</span></div>
+          <div class="task-main">
+            <div class="wu-pill-row">${kindPill}<span class="wu-provider">Groq</span></div>
+            <div class="task-title wu-title">${esc(t.title)}</div>
+            <div class="task-meta wu-meta">${sourceText}</div>
+          </div>
+          <div class="wu-coin-val">+ ₹${t.value}</div>
+          <div class="task-right wu-right">
+            ${done
+              ? `<span class="badge solved">Completed</span>`
+              : `<button class="wu-start-btn" data-wu-start="${esc(t.ref)}">
+                   <span>Start</span>
+                   <span class="wu-start-arrow">→</span>
+                 </button>`}
+            <button class="task-del" data-del="${esc(t.ref)}" aria-label="Remove ${esc(t.title)}" title="Remove task">×</button>
+          </div>
+        </div>
+      `;
+    }
+    const chips = chipsFor(t);
     return `
       <div class="task-row ${done ? "done" : ""} ${needsRating ? "capture" : ""} ${isRevisit ? "revisit" : ""}" data-ref="${esc(t.ref)}">
         <button class="checkbox ${done ? "done" : ""}" data-ref="${esc(t.ref)}" aria-label="Toggle ${esc(t.title)}"></button>
         <div class="task-main">
-          <div class="task-title">${kindPill}${kindPill ? " " : ""}${esc(t.title)}</div>
+          <div class="task-title-row">
+            <div class="task-title">${kindPill}${kindPill ? " " : ""}${esc(t.title)}</div>
+            ${chips ? `<div class="hover-chips">${chips}</div>` : ""}
+          </div>
           <div class="task-meta">${esc(subFor(t))}</div>
           ${needsRating ? `
             <div class="confidence-prompt" data-rate-ref="${esc(t.ref)}">
@@ -251,8 +344,40 @@ function paintPlan(root) {
               <small class="cp-hint">press <kbd>1</kbd>–<kbd>5</kbd> or click a star</small>
             </div>
           ` : ""}
+          ${showReviewStrip ? `
+            <div class="review-strip" data-review-ref="${esc(t.ref)}">
+              <span class="rs-label">Bring it back? ${infoIcon({
+                title: "Review-override chips",
+                body: "Pick when this problem should return as a REDO. Overrides spaced-rep — even a ★ 5 will revisit tomorrow if you pick it.",
+                bullets: [
+                  "Default — use the ★ rating (★1 → 1d, ★2 → 3d, ★3 → 7d, ★4/5 skip)",
+                  "Tomorrow — force queue tomorrow",
+                  "In 3 days — force queue in 3 days",
+                  "Mastered — never auto-revisit"
+                ]
+              })}</span>
+              <button class="rs-chip" data-review="default" title="Default — use ★ rating">Default</button>
+              <button class="rs-chip" data-review="tomorrow" title="Force-queue tomorrow">Tomorrow</button>
+              <button class="rs-chip" data-review="in3days" title="Force-queue in 3 days">In 3 days</button>
+              <button class="rs-chip rs-chip-done" data-review="mastered" title="Never — mastered">Mastered</button>
+            </div>
+          ` : ""}
+          ${reviewOverride ? `
+            <div class="review-set">
+              <span class="rs-set-dot"></span>
+              ${reviewOverride === "mastered"
+                ? `Mastered · no revisit`
+                : reviewOverride === "tomorrow"
+                  ? `Review set for <b>tomorrow</b>`
+                  : reviewOverride === "in3days"
+                    ? `Review set for <b>in 3 days</b>`
+                    : ""}
+              <button class="rs-undo" data-review-undo="${esc(t.ref)}" title="Reset to default">reset</button>
+            </div>
+          ` : ""}
         </div>
         <div class="coin-val">+ ₹${t.value}</div>
+        ${renderTimerButton(day, t)}
         <div class="task-right">
           <span class="badge ${done ? "solved" : "todo"}">
             ${done
@@ -267,11 +392,13 @@ function paintPlan(root) {
     `;
   }).join("") || `<div class="empty-state" style="padding:24px 0;"><p>No tasks today. Rest day — or hit the add row to drop one in.</p></div>`;
 
-  // "Working ahead" banner — the current calendar GAIN day is done, we've
-  // auto-rolled to tomorrow's plan. Shown above the task list.
+  // Day context banner. Three states:
+  //   1. dateKey == realToday — regular Today view, no banner
+  //   2. dateKey > realToday  — auto-advanced to tomorrow (working ahead)
+  //   3. dateKey < realToday  — user navigated to a past day (fix mistakes)
   const realToday = todayKey();
   let bannerEl = root.querySelector("#next-day-banner");
-  if (dateKey !== realToday) {
+  if (dateKey > realToday) {
     const hhmm = hoursToRollover();
     if (!bannerEl) {
       bannerEl = document.createElement("div");
@@ -293,12 +420,47 @@ function paintPlan(root) {
     subEl.textContent = totalTasks
       ? `${totalTasks} early task${totalTasks === 1 ? "" : "s"} for tomorrow. Keep stacking.`
       : "No plan generated.";
+  } else if (dateKey < realToday) {
+    if (!bannerEl) {
+      bannerEl = document.createElement("div");
+      bannerEl.id = "next-day-banner";
+      bannerEl.className = "next-day-banner past-banner";
+      rowsEl.parentElement.insertBefore(bannerEl, rowsEl);
+    } else {
+      bannerEl.className = "next-day-banner past-banner";
+    }
+    const prettyDate = (() => {
+      try { return new Date(dateKey + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }); }
+      catch (_) { return dateKey; }
+    })();
+    bannerEl.innerHTML = `
+      <div class="nd-text">
+        📅 Viewing <b>${esc(prettyDate)}</b> — any ticks here edit that past day. Untick a mistake and ratings update too.
+      </div>
+      <button class="nd-undo" id="nd-back">← Back to today</button>
+    `;
+    bannerEl.querySelector("#nd-back")?.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      viewedOverride = null;
+      paintPlan(root);
+    });
+    subEl.textContent = totalTasks
+      ? `${totalTasks} task${totalTasks === 1 ? "" : "s"} on this day. Edit freely.`
+      : "No plan on this day.";
   } else {
     if (bannerEl) bannerEl.remove();
     subEl.textContent = totalTasks ? `${totalTasks} focused task${totalTasks === 1 ? "" : "s"}. Real progress.` : "No plan generated.";
   }
   cntEl.textContent = `${doneTasks} of ${totalTasks} complete`;
   prEl.style.width = `${pct}%`;
+
+  // Glow the "Suggest another task" button when today's plan is 100% done — the user's cue to "do one more"
+  const suggestRow = root.querySelector("#suggest-row");
+  if (suggestRow) {
+    const allDone = totalTasks > 0 && doneTasks >= totalTasks;
+    suggestRow.classList.toggle("glow", allDone);
+  }
 
   // Live countdown + at-risk state.
   updateRollover(root);
@@ -367,6 +529,46 @@ function paintPlan(root) {
     });
   });
 
+  // Vim-ish keyboard nav for the plan (j/k/space). Attached once per mount.
+  if (!root._kbNav) {
+    let focusedIdx = -1;
+    const focusRow = (idx) => {
+      const rows = root.querySelectorAll(".task-row");
+      if (!rows.length) return;
+      idx = Math.max(0, Math.min(rows.length - 1, idx));
+      focusedIdx = idx;
+      rows.forEach((r, i) => r.classList.toggle("kb-focus", i === idx));
+      const target = rows[idx];
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    };
+    root._kbNav = (e) => {
+      // Don't hijack keystrokes while user is typing in an input or textarea
+      if (e.target.matches("input, textarea, select") || e.target.isContentEditable) return;
+      // Don't hijack if a modal is open
+      if (document.querySelector(".lsn-scrim, .glossary-scrim, .lc-scrim, .wu-scrim, .recap-scrim, .sg-scrim, .shop-hub-scrim, .lib-modal-scrim, .claim-modal-scrim")) return;
+      if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        focusRow(focusedIdx + 1);
+      } else if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        focusRow(focusedIdx - 1);
+      } else if (e.key === " " || e.key === "Enter") {
+        const rows = root.querySelectorAll(".task-row");
+        if (focusedIdx >= 0 && focusedIdx < rows.length) {
+          e.preventDefault();
+          const row = rows[focusedIdx];
+          const checkbox = row.querySelector("button.checkbox");
+          if (checkbox) checkbox.click();
+        }
+      } else if (e.key === "?") {
+        // Open the glossary
+        e.preventDefault();
+        import("./info.js").then(({ openGlossaryModal }) => openGlossaryModal());
+      }
+    };
+    window.addEventListener("keydown", root._kbNav);
+  }
+
   // One keyboard handler per paint — captures 1-5 and Esc while a capture-state row exists
   if (!root._kbRater) {
     root._kbRater = async (e) => {
@@ -389,13 +591,86 @@ function paintPlan(root) {
       await handleDelete(btn.dataset.del, root);
     });
   });
+  // Warm-up Start button → open quiz modal
+  rowsEl.querySelectorAll("[data-wu-start]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await openWarmupQuiz({ root, taskRef: btn.dataset.wuStart });
+    });
+  });
+
+  // Review-override chips ("Bring it back?" after rating)
+  rowsEl.querySelectorAll(".review-strip .rs-chip").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const strip = btn.closest(".review-strip");
+      const ref = strip.dataset.reviewRef;
+      const choice = btn.dataset.review;
+      const dateKey = currentKey();
+      await setReviewOverride(dateKey, ref, choice);
+      paintPlan(root);
+    });
+  });
+  // Review-undo (reset to default)
+  rowsEl.querySelectorAll(".rs-undo").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const dateKey = currentKey();
+      await setReviewOverride(dateKey, btn.dataset.reviewUndo, "default");
+      paintPlan(root);
+    });
+  });
+
+  // Session timer buttons
+  rowsEl.querySelectorAll("[data-timer]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await toggleTimer(root, btn.dataset.timer);
+    });
+  });
+
+  // Live-update any running timers every 1s. Debounced in-place DOM updates
+  // (no re-render) so the row's handlers stay bound.
+  if (!root._timerTick) {
+    root._timerTick = setInterval(() => tickRunningTimers(root), 1000);
+  }
+
+  // ✦ Learn chip → open lesson modal in-place
+  rowsEl.querySelectorAll(".hc-learn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openLessonModal({
+        sheetName: btn.dataset.learnSheet,
+        rowIndex: Number(btn.dataset.learnRow),
+      });
+    });
+  });
+
   // Click anywhere on the task row (except interactive bits) also toggles.
+  // EXCEPTION: done rows require an explicit checkbox or ✕ click — their row-wide
+  // area is "sealed" (per user request: once done, only checkbox or × are active).
   rowsEl.querySelectorAll(".task-row").forEach(row => {
     row.addEventListener("click", async (e) => {
       if (e.target.closest("button.checkbox")) return;
       if (e.target.closest("button.task-del")) return;
       if (e.target.closest(".badge, .chev, .coin-val")) return;
       if (e.target.closest(".confidence-prompt, .star")) return;  // let stars handle their own clicks
+      if (e.target.closest(".wu-start-btn, .wu-card-ico")) return;
+      if (e.target.closest(".hc-learn, .hover-chip")) return;      // chips are their own interactions
+      if (e.target.closest(".task-timer")) return;                  // timer button has its own handler
+      if (e.target.closest(".review-strip, .review-set")) return;   // review chips have their own
+      // Done rows: no row-wide untick. Must click the actual checkbox or ×.
+      if (row.classList.contains("done")) return;
+      // Warm-up rows don't tick on row click — only Start opens the quiz.
+      if (row.classList.contains("warmup")) {
+        const startBtn = row.querySelector("[data-wu-start]");
+        if (startBtn) startBtn.click();
+        return;
+      }
       const btn = row.querySelector("button.checkbox");
       if (btn) await handleTick(btn, root);
     });
@@ -404,7 +679,7 @@ function paintPlan(root) {
 
 async function handleDelete(ref, root) {
   const { updateDayLog } = await import("./store.js");
-  const dateKey = activeKey();
+  const dateKey = currentKey();
   const day = getDayLog()[dateKey];
   if (!day) return;
   const task = day.assigned.find(t => t.ref === ref);
@@ -459,7 +734,7 @@ function updateRollover(root) {
   // "Streak at risk" banner — appears above the plan when < 2h left AND tasks undone.
   // Hidden otherwise. Fires inside today's calendar day only (not when viewing tomorrow).
   const realToday = todayKey();
-  const dateKey = activeKey();
+  const dateKey = currentKey();
   const day = getDayLog()[dateKey];
   const undone = day ? day.assigned.filter(t => !day.done.includes(t.ref)).length : 0;
   const viewingToday = dateKey === realToday;
@@ -493,6 +768,364 @@ function updateRollover(root) {
   } else if (risk) {
     risk.remove();
   }
+}
+
+function openHistoryPopup(root, anchor) {
+  document.querySelectorAll(".hist-pop").forEach(p => p.remove());
+  const dayLog = getDayLog();
+  const realToday = todayKey();
+  // Last 14 days with a plan, newest first (excluding today — "Back to today" button handles that).
+  const dates = Object.keys(dayLog)
+    .filter(k => dayLog[k]?.assigned?.length)
+    .sort().reverse()
+    .filter(k => k !== realToday)
+    .slice(0, 14);
+
+  if (!dates.length) {
+    const toast = document.createElement("div");
+    toast.className = "hist-toast";
+    toast.textContent = "No past days with a plan yet.";
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 1800);
+    return;
+  }
+
+  const pop = document.createElement("div");
+  pop.className = "hist-pop";
+  const rect = anchor.getBoundingClientRect();
+  pop.style.top  = `${rect.bottom + 8}px`;
+  pop.style.left = `${rect.left}px`;
+  pop.innerHTML = `
+    <div class="hist-head">Jump to a past day</div>
+    ${dates.map(k => {
+      const d = dayLog[k];
+      const done = d.done?.length || 0;
+      const total = d.assigned?.length || 0;
+      const prettyLabel = (() => {
+        try { return new Date(k + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }); }
+        catch (_) { return k; }
+      })();
+      const sev = d.green ? "green" : done === 0 ? "red" : "amber";
+      return `<button class="hist-item hi-${sev}" data-k="${esc(k)}">
+        <span class="hi-date">${esc(prettyLabel)}</span>
+        <span class="hi-stat">${done}/${total}${d.green ? " ✓" : ""}</span>
+      </button>`;
+    }).join("")}
+  `;
+  document.body.appendChild(pop);
+  pop.querySelectorAll(".hist-item").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      viewedOverride = btn.dataset.k;
+      pop.remove();
+      paintPlan(root);
+    });
+  });
+  const closer = (e) => {
+    if (!pop.contains(e.target) && e.target !== anchor) {
+      pop.remove();
+      document.removeEventListener("click", closer);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", closer), 50);
+}
+
+async function toggleTimer(root, ref) {
+  const dateKey = currentKey();
+  const { updateDayLog } = await import("./store.js");
+  await updateDayLog(dl => {
+    const d = dl[dateKey];
+    if (!d) return;
+    d.timeOnTask = d.timeOnTask || {};
+    const slot = d.timeOnTask[ref] || { sec: 0 };
+    if (slot.startedAt) {
+      // pause: fold elapsed into sec, clear startedAt
+      slot.sec = slot.sec + Math.floor((Date.now() - slot.startedAt) / 1000);
+      slot.startedAt = null;
+    } else {
+      // start: record startedAt
+      slot.startedAt = Date.now();
+    }
+    d.timeOnTask[ref] = slot;
+  });
+  paintPlan(root);  // re-render so icon flips and badge updates
+}
+
+function tickRunningTimers(root) {
+  const dateKey = currentKey();
+  const day = getDayLog()[dateKey];
+  if (!day?.timeOnTask) return;
+  for (const [ref, slot] of Object.entries(day.timeOnTask)) {
+    if (!slot.startedAt) continue;
+    const btn = root.querySelector(`.task-timer[data-timer="${CSS.escape(ref)}"]`);
+    if (!btn) continue;
+    const live = slot.sec + Math.floor((Date.now() - slot.startedAt) / 1000);
+    const timeEl = btn.querySelector(".tt-time");
+    if (timeEl) timeEl.textContent = formatSec(live);
+  }
+}
+
+// Open a tiny modal, user pastes a LeetCode URL (or just a problem title). Groq
+// extracts metadata (title + pattern + difficulty + LC#). We add it to the DSA
+// sheet (if not already there) + today's plan.
+async function openLeetCodePaste(root) {
+  const { secure, callGrok, getSheets, addSheetRow, updateSheetRow } = await import("./store.js");
+  document.querySelectorAll(".lc-scrim").forEach(m => m.remove());
+
+  const scrim = document.createElement("div");
+  scrim.className = "lc-scrim";
+  scrim.innerHTML = `
+    <div class="lc-modal">
+      <header>
+        <h3>Paste a LeetCode URL</h3>
+        <button class="lc-close" aria-label="Close">✕</button>
+      </header>
+      <p>Paste <code>leetcode.com/problems/foo-bar/</code> (or any Google result that mentions a LeetCode problem). Groq extracts the title, pattern, difficulty + LC #, then adds it to your DSA sheet and today's plan.</p>
+      <input type="text" id="lc-url" placeholder="https://leetcode.com/problems/..." autofocus />
+      <div class="lc-row">
+        <button class="lc-btn ghost" id="lc-cancel">Cancel</button>
+        <button class="lc-btn primary" id="lc-fetch">✦ Extract &amp; add</button>
+      </div>
+      <div class="lc-status" id="lc-status"></div>
+    </div>
+  `;
+  document.body.appendChild(scrim);
+  document.body.style.overflow = "hidden";
+  injectLcStyles();
+
+  const close = () => { document.body.style.overflow = ""; scrim.remove(); };
+  scrim.querySelector(".lc-close").addEventListener("click", close);
+  scrim.querySelector("#lc-cancel").addEventListener("click", close);
+  scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+
+  scrim.querySelector("#lc-fetch").addEventListener("click", async () => {
+    const url = scrim.querySelector("#lc-url").value.trim();
+    const status = scrim.querySelector("#lc-status");
+    const btn = scrim.querySelector("#lc-fetch");
+    if (!url) { status.textContent = "Paste a URL first."; return; }
+    btn.disabled = true;
+    status.textContent = "Asking Groq…";
+
+    try {
+      const apiKey = (await secure.get("groq_api_key").catch(() => null)) ||
+                     (await secure.get("grok_api_key").catch(() => null));
+      if (!apiKey) throw new Error("No Groq API key. Add one in Settings → AI butler.");
+
+      // Try to extract LC# directly from URL first (free, instant)
+      const slug = (url.match(/leetcode\.com\/problems\/([a-z0-9-]+)/i) || [])[1];
+      const res = await callGrok({
+        apiKey,
+        jsonMode: true,
+        maxTokens: 256,
+        temperature: 0.2,
+        system: `You identify LeetCode problems from a URL or slug. Reply as strict JSON only (no markdown, no code fences).
+Schema: {"title": "<official problem title, e.g. 'Group Anagrams'>", "lcNumber": <integer LC #>, "pattern": "<2-4 word pattern name, e.g. 'Sliding Window'>", "difficulty": "<Easy|Medium|Hard>"}
+If you don't know the exact LC number, output your best guess but mark the title precisely.`,
+        user: `URL: ${url}${slug ? `\nSlug: ${slug}` : ""}`,
+      });
+      if (!res.ok) throw new Error(res.error || "Groq call failed");
+      let parsed;
+      try {
+        const raw = res.content.trim().replace(/^```json\s*|\s*```$/g, "");
+        parsed = JSON.parse(raw);
+      } catch (_) { throw new Error("Couldn't parse Groq response."); }
+
+      const title = String(parsed.title || "").trim();
+      const lcNumber = Number(parsed.lcNumber) || null;
+      const pattern = String(parsed.pattern || "").trim();
+      const difficulty = String(parsed.difficulty || "").trim();
+      if (!title) throw new Error("Groq couldn't identify the problem.");
+
+      // Check if row already exists in DSA sheet by title or LC#
+      const sheet = getSheets()["DSA"];
+      if (!sheet) throw new Error("DSA sheet isn't loaded.");
+      const titleCol = sheet.headers.find(h => /^(problem)$/i.test(h)) || sheet.headers.find(h => /^(title|name)$/i.test(h));
+      const lcCol = sheet.headers.find(h => /^lc#?$/i.test(h));
+      const patCol = sheet.headers.find(h => /^(pattern|category)$/i.test(h));
+      const diffCol = sheet.headers.find(h => /^difficulty$/i.test(h));
+      const statusCol = sheet.headers.find(h => /^status$/i.test(h));
+
+      let rowIndex = -1;
+      if (titleCol) {
+        const needle = title.toLowerCase();
+        rowIndex = sheet.rows.findIndex(r => String(r[titleCol] || "").trim().toLowerCase() === needle);
+      }
+      if (rowIndex < 0 && lcCol && lcNumber) {
+        rowIndex = sheet.rows.findIndex(r => String(r[lcCol] || "").trim() === String(lcNumber));
+      }
+
+      if (rowIndex < 0) {
+        // Append new row
+        const patch = {};
+        if (titleCol) patch[titleCol] = title;
+        if (lcCol && lcNumber) patch[lcCol] = String(lcNumber);
+        if (patCol && pattern) patch[patCol] = pattern;
+        if (diffCol && difficulty) patch[diffCol] = difficulty;
+        if (statusCol) patch[statusCol] = "TODO";
+        rowIndex = await addSheetRow("DSA", patch);
+      }
+
+      // Add to today's plan
+      const dateKey = activeKey();
+      const { updateDayLog, getSettings } = await import("./store.js");
+      const settings = getSettings();
+      const { priceTask } = await import("./engine.js");
+      const minutes = difficulty.toLowerCase() === "easy" ? 25 : difficulty.toLowerCase() === "hard" ? 55 : 40;
+      const value = priceTask({ kind: "dsa", difficulty, minutes }, settings);
+      const ref = `LC-${lcNumber || Date.now()}-${Date.now()}`;
+      await updateDayLog(dl => {
+        const d = dl[dateKey];
+        if (!d) return;
+        const t = {
+          ref,
+          kind: "dsa",
+          title,
+          pattern,
+          difficulty,
+          lc: lcNumber ? String(lcNumber) : "",
+          minutes,
+          value,
+          sheet: "DSA",
+          rowIndex,
+          suggested: true,  // show ✦ SUGGESTED pill
+        };
+        d.assigned.push(t);
+        d.values[ref] = value;
+      });
+      paintPlan(root);
+      close();
+      flashRowToast(root, `✓ Added: ${title}${lcNumber ? ` · LC #${lcNumber}` : ""}`);
+    } catch (e) {
+      status.textContent = `✗ ${e.message || e}`;
+      btn.disabled = false;
+    }
+  });
+}
+
+function injectLcStyles() {
+  if (document.getElementById("lc-styles")) return;
+  const style = document.createElement("style");
+  style.id = "lc-styles";
+  style.textContent = `
+    .lc-scrim {
+      position: fixed; inset: 0; z-index: 1300;
+      background: rgba(8,10,14,.66);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .lc-modal {
+      background: var(--paper); border-radius: 16px;
+      width: 100%; max-width: 480px; padding: 22px 24px;
+      box-shadow: 0 32px 80px rgba(0,0,0,.4), 0 0 0 1px var(--line);
+      animation: slideDownFade 240ms cubic-bezier(.2,1.2,.3,1);
+    }
+    .lc-modal header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .lc-modal h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--ink); }
+    .lc-modal .lc-close {
+      border: none; background: transparent; cursor: pointer; color: var(--mut);
+      width: 28px; height: 28px; border-radius: 6px;
+      font: 400 16px/1 var(--font-sans);
+    }
+    .lc-modal .lc-close:hover { background: var(--bg); color: var(--ink); }
+    .lc-modal p { font-size: 12.5px; color: var(--mut); line-height: 1.55; margin: 0 0 16px; }
+    .lc-modal code { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-size: 11px; color: var(--ink); }
+    .lc-modal input {
+      width: 100%; box-sizing: border-box;
+      padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px;
+      background: var(--bg); color: var(--ink);
+      font: 500 13px/1.3 var(--font-sans); outline: none;
+      transition: all .18s;
+    }
+    .lc-modal input:focus { border-color: var(--gold); background: var(--paper); box-shadow: 0 0 0 3px color-mix(in oklab, var(--gold) 20%, transparent); }
+    .lc-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+    .lc-btn {
+      padding: 10px 18px; border-radius: 10px; cursor: pointer;
+      font: 600 13px/1 var(--font-sans);
+      border: 1px solid var(--line); transition: all .18s;
+    }
+    .lc-btn.ghost { background: var(--paper); color: var(--mut); }
+    .lc-btn.ghost:hover { color: var(--ink); border-color: var(--line2); }
+    .lc-btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .lc-btn.primary:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
+    .lc-btn:disabled { opacity: .5; cursor: wait; }
+    .lc-status { margin-top: 10px; font-size: 11.5px; color: var(--mut); min-height: 14px; }
+  `;
+  document.head.appendChild(style);
+}
+
+// Scan dayLog for the weakest-confidence past solve that's NOT already in today's
+// plan, and inject it as an extra REDO task. One-click for the user; cross-sheet.
+async function addExtraRedo(root) {
+  const dateKey = activeKey();
+  const day = getDayLog()[dateKey];
+  if (!day) return;
+
+  // Collect ALL past solves with sheet/rowIndex + confidence
+  const dayLog = getDayLog();
+  const existingKeys = new Set(day.assigned
+    .filter(t => t.sheet && t.rowIndex != null)
+    .map(t => `${t.sheet}#${t.rowIndex}`));
+  const seen = new Set();
+  const pool = [];
+  const dates = Object.keys(dayLog).sort().reverse();
+  for (const d of dates) {
+    if (d === dateKey) continue;
+    const entry = dayLog[d];
+    if (!entry?.assigned?.length) continue;
+    for (const ref of (entry.done || [])) {
+      const task = entry.assigned.find(t => t.ref === ref);
+      if (!task?.sheet || task.rowIndex == null) continue;
+      const key = `${task.sheet}#${task.rowIndex}`;
+      if (seen.has(key) || existingKeys.has(key)) continue;
+      seen.add(key);
+      const conf = entry.confidence?.[ref] ?? 3;
+      pool.push({ task, conf, date: d });
+    }
+  }
+  if (!pool.length) {
+    flashRowToast(root, "No past solves available to redo. Keep rating today's problems.");
+    return;
+  }
+  // Pick weakest-confidence; break ties by oldest
+  pool.sort((a, b) => a.conf - b.conf || a.date.localeCompare(b.date));
+  const pick = pool[0].task;
+  const { updateDayLog } = await import("./store.js");
+  const ref = `REV-${pick.sheet}-${pick.rowIndex}-${dateKey}-extra`;
+  await updateDayLog(dl => {
+    const d = dl[dateKey];
+    if (!d) return;
+    const settings = /* already imported */ getSettings();
+    const value = Math.max(10, Math.round((settings.wallet.taskMin || 10) * 2));
+    const task = {
+      ref,
+      kind: "revisit",
+      title: pick.title,
+      pattern: pick.pattern || "",
+      sheet: pick.sheet,
+      rowIndex: pick.rowIndex,
+      minutes: 15,
+      value,
+      extraRedo: true,
+    };
+    d.assigned.push(task);
+    d.values[ref] = value;
+  });
+  paintPlan(root);
+  flashRowToast(root, `↻ Added REDO: ${pick.title}`);
+}
+
+function flashRowToast(root, message) {
+  document.querySelectorAll(".row-toast").forEach(t => t.remove());
+  const toast = document.createElement("div");
+  toast.className = "row-toast";
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.classList.add("show"), 10);
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 240);
+  }, 2600);
 }
 
 async function undoLastTick(root) {
@@ -539,7 +1172,7 @@ async function undoLastTick(root) {
 }
 
 async function rateAndRepaint(root, ref, rating) {
-  const dateKey = activeKey();
+  const dateKey = currentKey();
   await setConfidence(dateKey, ref, rating);
   const row = root.querySelector(`.task-row[data-ref="${CSS.escape(ref)}"]`);
   const badge = row?.querySelector(".badge");
@@ -581,7 +1214,7 @@ function fireMicroConfetti(anchor) {
 
 async function handleTick(btn, root) {
   const ref = btn.dataset.ref;
-  const dateKey = activeKey();
+  const dateKey = currentKey();
   const day = getDayLog()[dateKey];
   if (!day) { console.warn("[today] no day log"); return; }
   const task = day.assigned.find(t => t.ref === ref);
@@ -595,16 +1228,33 @@ async function handleTick(btn, root) {
     });
     await syncSheetOnUntick(task);
   } else {
+    // Auto-pause the session timer if it was running — fold elapsed into sec
+    const { updateDayLog } = await import("./store.js");
+    await updateDayLog(dl => {
+      const d = dl[dateKey];
+      if (!d?.timeOnTask?.[ref]?.startedAt) return;
+      const slot = d.timeOnTask[ref];
+      slot.sec = slot.sec + Math.floor((Date.now() - slot.startedAt) / 1000);
+      slot.startedAt = null;
+    });
     await tickTask(dateKey, ref);
     const sourceKey = task.sheet && task.rowIndex != null ? `${task.sheet}#${task.rowIndex}` : null;
+    // Phase 7 — daily earnings cap
+    const settings = getSettings();
+    const capped = capTaskValue(getWallet(), settings, task.value);
+    const bankValue = capped.amount;
     await updateWallet(w => {
-      w.earned += task.value;
+      w.earned += bankValue;
       w.ledger.push({
         date: new Date().toISOString(), type: "task",
-        amount: task.value, label: task.title,
-        sourceKey   // claim this sheet row — problem page won't re-bank it
+        amount: bankValue, label: task.title,
+        sourceKey,   // claim this sheet row — problem page won't re-bank it
+        cappedFrom: capped.capped ? capped.originalAmount : undefined,
       });
     });
+    if (capped.capped) {
+      flashRowToast(root, `⚠ Daily cap of ₹${settings.wallet.dailyEarningCap} reached — banked ₹${bankValue} (₹${capped.originalAmount - bankValue} skipped)`);
+    }
     await syncSheetOnTick(task);
     btn.animate([{ transform: "scale(1)" }, { transform: "scale(1.25)" }, { transform: "scale(1)" }],
                 { duration: 320, easing: "cubic-bezier(.2,1.4,.3,1)" });
@@ -625,6 +1275,28 @@ async function handleTick(btn, root) {
       if (latest.assigned.length >= 2) {
         setTimeout(() => fireDaySecured({ amount: latest.dayEarned + (bonus || 0) }), 1200);
       }
+
+      // Phase 7 — Perfect-week bonus (9D): fires at every N-th consecutive green day.
+      // Separate from the week/month celebrations above; pure consistency reward.
+      setTimeout(async () => {
+        const pw = maybeFirePerfectWeek(getDayLog(), dateKey, getSettings());
+        if (pw) {
+          await updateWallet(w => {
+            w.earned += pw.bonus;
+            w.ledger.push({
+              date: new Date().toISOString(),
+              type: "perfect-week-bonus",
+              amount: pw.bonus,
+              label: `Perfect ${pw.count}-day streak bonus`,
+            });
+          });
+          await (async () => {
+            const { updateDayLog } = await import("./store.js");
+            await updateDayLog(dl => { if (dl[dateKey]) dl[dateKey].perfectWeekAwarded = true; });
+          })();
+          flashRowToast(root, `✨ ${pw.count}-day perfect streak · + ₹${pw.bonus}`);
+        }
+      }, 3000);
 
       // Week/Month celebrations always run on their own schedules regardless of task count.
       setTimeout(async () => {
@@ -656,11 +1328,14 @@ async function handleTick(btn, root) {
       }, 11500);
     }
     // Early-finish: if that tick completed every task for the current day,
-    // make sure tomorrow's plan exists so the next re-paint flips to it.
+    // make sure tomorrow's plan exists so the next re-paint flips to it,
+    // and fire the daily recap (debounced to once per day).
     const after = getDayLog()[dateKey];
     if (after && after.assigned.length > 0 && after.done.length >= after.assigned.length) {
       await ensureDailyPlan(nextDayKey());
       paintPlan(root);
+      // Delay slightly so capture-state star rating finishes animating first.
+      setTimeout(() => { tryOpenRecap({ reason: "all-done" }); }, 2200);
     }
   }
 }
@@ -672,6 +1347,49 @@ function attachHandlers(root) {
   const addInput = root.querySelector("#add-task-input");
   const addToggle = root.querySelector("#add-task-toggle");
   const addEx = root.querySelector("#add-row-ex");
+
+  // History dropdown — pick a past day with a plan to view/edit
+  const histBtn = root.querySelector("#hist-btn");
+  histBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openHistoryPopup(root, histBtn);
+  });
+
+  // ✦ Suggest a task → opens Groq-picker modal
+  root.querySelector("#suggest-btn")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    openSuggestModal(root);
+  });
+
+  // ⋯ More dropdown — toggle open/close
+  const moreBtn = root.querySelector("#more-btn");
+  const morePop = root.querySelector("#more-pop");
+  if (moreBtn && morePop) {
+    const closeMore = () => {
+      morePop.hidden = true;
+      moreBtn.setAttribute("aria-expanded", "false");
+    };
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = morePop.hidden;
+      morePop.hidden = !open;
+      moreBtn.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("click", (e) => {
+      if (morePop.hidden) return;
+      if (!morePop.contains(e.target) && e.target !== moreBtn) closeMore();
+    });
+    // Each menu item
+    morePop.querySelectorAll(".more-item").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        closeMore();
+        const kind = btn.dataset.more;
+        if (kind === "redo") await addExtraRedo(root);
+        else if (kind === "lcpaste") await openLeetCodePaste(root);
+      });
+    });
+  }
 
   addToggle?.addEventListener("click", () => {
     const expanded = !addEx.hidden;
@@ -685,7 +1403,7 @@ function attachHandlers(root) {
     const val = (addInput?.value || "").trim();
     if (!val) return;
     const { updateDayLog, KIND_TO_SHEET, addSheetRow, updateSheetRow, getSheets } = await import("./store.js");
-    const dateKey = activeKey();
+    const dateKey = currentKey();
     const ref = `ADHOC-${Date.now()}`;
 
     // Pull expanded config if the panel is open; else sensible defaults
@@ -811,8 +1529,10 @@ async function syncSheetOnUntick(task) {
   if (Object.keys(patch).length) await updateSheetRow(task.sheet, rowIndex, patch);
 }
 
+// Default (always-visible) meta line — kept short + uncluttered.
+// LC# and difficulty surface only on hover via chipsFor().
 function subFor(t) {
-  if (t.kind === "dsa")      return `${t.pattern || "DSA"} · ${t.minutes} min${t.lc ? " · LC #" + t.lc : ""}`;
+  if (t.kind === "dsa")      return `${t.pattern || "DSA"} · ${t.minutes} min`;
   if (t.kind === "revision") return `DSA · ${t.minutes} min quiz`;
   if (t.kind === "log")      return `Progress · Update the sheet`;
   if (t.kind === "sd")       return `System Design · ${t.minutes} min`;
@@ -820,9 +1540,59 @@ function subFor(t) {
   if (t.kind === "ext")      return `${t.pattern || "Interview Extras"} · ${t.minutes} min`;
   return `${t.minutes || 15} min`;
 }
+
+// Session timer button on each study row — "▶ 2:35" when paused, "⏸ 2:35" when
+// running. Click toggles. State lives in dayLog[date].timeOnTask[ref] = {sec, startedAt}.
+// Only shown for study-kind rows (not warmup/revision/log — those aren't the
+// problems you spend "deep focus" minutes on).
+function renderTimerButton(day, t) {
+  const studyKinds = ["dsa", "sd", "int", "ext", "sql"];
+  // Keep the grid cell for layout consistency even on non-study rows (revision/log/warmup).
+  if (!studyKinds.includes(t.kind)) return `<span class="task-timer-slot"></span>`;
+  const data = day.timeOnTask?.[t.ref] || { sec: 0 };
+  // If started, show elapsed = sec + (now - startedAt). On re-paint we recompute live.
+  const running = !!data.startedAt;
+  const live = running ? data.sec + Math.floor((Date.now() - data.startedAt) / 1000) : data.sec;
+  const isDone = (day.done || []).includes(t.ref);
+  const titleText = isDone
+    ? `Final focus time: ${formatSec(live)}`
+    : `Session timer — click to ${running ? "pause" : "start"}`;
+  return `
+    <button class="task-timer ${running ? "running" : ""}" data-timer="${esc(t.ref)}" title="${esc(titleText)}" ${isDone ? "disabled" : ""}>
+      <span class="tt-ico">${running ? "⏸" : "▶"}</span>
+      <span class="tt-time">${formatSec(live)}</span>
+    </button>
+  `;
+}
+
+function formatSec(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+  return `${m}:${String(sec).padStart(2,"0")}`;
+}
+
+// Hover-only chips (classy, hidden by default, fade in on row hover).
+// Returns an HTML string of 0-N `.hover-chip` spans.
+function chipsFor(t) {
+  const bits = [];
+  if (t.difficulty) {
+    const sev = String(t.difficulty).toLowerCase();
+    bits.push(`<span class="hover-chip hc-diff hc-${sev}">${esc(t.difficulty)}</span>`);
+  }
+  if (t.lc) bits.push(`<span class="hover-chip hc-lc">LC&nbsp;#${esc(String(t.lc))}</span>`);
+  if (t.freq && t.freq.toUpperCase() === "HIGH") bits.push(`<span class="hover-chip hc-freq">HIGH</span>`);
+  // "Learn this topic" chip — only for sheet-linked rows (DSA/SD/Int/Ext/SQL)
+  if (t.sheet && t.rowIndex != null && t.kind !== "warmup") {
+    bits.push(`<button class="hover-chip hc-learn" data-learn-sheet="${esc(t.sheet)}" data-learn-row="${esc(String(t.rowIndex))}" title="Teacher-mode lesson (Groq)">✦ Learn</button>`);
+  }
+  return bits.join("");
+}
 function badgeFor(t) {
-  if (t.kind === "dsa") return t.difficulty || "Not started";
-  return "Not started";
+  // Note: difficulty for DSA now lives in a hover-chip, not the badge.
+  // The badge is just a status cue — "Pending" with a tiny bolt glyph.
+  return `<span class="pending-glyph">⌁</span> Pending`;
 }
 
 function honestLine() {
@@ -1033,7 +1803,7 @@ function styles() {
     .today .plan-rows { display:flex; flex-direction: column; }
 
     .today .task-row {
-      display: grid; grid-template-columns: 32px 1fr auto auto;
+      display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto auto;
       gap: var(--s-3); align-items: center;
       padding: var(--s-3) var(--s-1); border-top: 1px solid var(--line);
       transition: background var(--dur-fast) var(--ease);
@@ -1066,6 +1836,12 @@ function styles() {
     .today .badge.solved { background: var(--green-soft); color: var(--green); }
     .today .badge.progress { background: var(--blue-soft); color: var(--blue); }
     .today .badge-stars { letter-spacing: 1px; color: var(--gold); font-size: 10px; margin-left: 2px; }
+    .today .pending-glyph {
+      display: inline-block; margin-right: 2px;
+      color: color-mix(in oklab, var(--mut) 70%, var(--gold));
+      font-size: 11px; line-height: 1;
+      transform: translateY(0.5px);
+    }
 
     /* ---- Capture-state row (just ticked, awaiting confidence rating) ---- */
     .today .task-row.capture {
@@ -1116,13 +1892,157 @@ function styles() {
       color: var(--ink);
     }
 
+    /* ---- Warm-up quiz row (first row of plan) — Apple-sophisticated palette ---- */
+    .today .task-row.warmup {
+      position: relative;
+      padding: 18px 20px;
+      border-radius: 14px;
+      margin-bottom: 10px;
+      display: flex; align-items: center; gap: 16px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow:
+        0 1px 2px rgba(0,0,0,.03),
+        0 1px 0 rgba(255,255,255,.6) inset;
+      overflow: hidden;
+      transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+    }
+    .today .task-row.warmup:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in oklab, var(--ink) 12%, var(--line));
+      box-shadow:
+        0 1px 2px rgba(0,0,0,.04),
+        0 8px 24px rgba(0,0,0,.06),
+        0 1px 0 rgba(255,255,255,.6) inset;
+    }
+    .today .task-row.warmup.done {
+      background: color-mix(in oklab, var(--green) 4%, var(--paper));
+      border-color: color-mix(in oklab, var(--green) 28%, var(--line));
+    }
+
+    .today .task-row.warmup .wu-card-ico {
+      width: 48px; height: 48px; flex-shrink: 0;
+      border-radius: 12px;
+      background: color-mix(in oklab, var(--gold) 10%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--gold) 22%, var(--line));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; color: var(--gold);
+    }
+    /* Subtle bolt breathing — Apple-y gentle, not neon */
+    .today .task-row.warmup .wu-bolt {
+      display: inline-block;
+      animation: wuBoltBreath 3200ms ease-in-out infinite;
+    }
+    @keyframes wuBoltBreath {
+      0%, 100% { opacity: .85; transform: scale(1); }
+      50%      { opacity: 1;   transform: scale(1.06); }
+    }
+    .today .task-row.warmup.done .wu-bolt { animation: none; opacity: .5; }
+
+    .today .task-row.warmup .task-main { min-width: 0; flex: 1; }
+    .today .task-row.warmup .wu-pill-row {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin-bottom: 7px;
+    }
+    .today .task-row.warmup .wu-provider {
+      font: 600 9.5px/1 var(--font-sans);
+      letter-spacing: .18em; text-transform: uppercase;
+      padding: 3px 7px; border-radius: 4px;
+      background: color-mix(in oklab, var(--ink) 5%, transparent);
+      color: var(--mut);
+    }
+    .today .task-row.warmup .wu-title {
+      font-size: 16px; font-weight: 600; color: var(--ink);
+      letter-spacing: -.014em; line-height: 1.25;
+    }
+    .today .task-row.warmup .wu-meta {
+      font-size: 12.5px; color: var(--mut); margin-top: 4px;
+    }
+    .today .task-row.warmup.done .wu-title {
+      text-decoration: none; color: var(--mut);
+    }
+
+    .today .task-row.warmup .wu-coin-val {
+      display: inline-flex; align-items: center;
+      padding: 5px 11px; border-radius: 999px;
+      background: color-mix(in oklab, var(--gold) 10%, transparent);
+      color: var(--gold);
+      font: 700 12.5px/1 var(--font-sans);
+      white-space: nowrap;
+      letter-spacing: -.005em;
+    }
+    .today .task-row.warmup .wu-right { display: flex; align-items: center; gap: 10px; }
+
+    /* Button — SF-style: solid ink, subtle depth */
+    .today .task-row.warmup .wu-start-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 9px 18px;
+      background: var(--ink); color: var(--paper);
+      border: none; border-radius: 10px;
+      cursor: pointer; font: 600 13px/1 var(--font-sans);
+      letter-spacing: -.005em;
+      box-shadow:
+        0 1px 2px rgba(0,0,0,.1),
+        0 1px 0 rgba(255,255,255,.1) inset;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .today .task-row.warmup .wu-start-btn:hover {
+      transform: translateY(-1px);
+      box-shadow:
+        0 4px 12px rgba(0,0,0,.14),
+        0 1px 0 rgba(255,255,255,.14) inset;
+    }
+    .today .task-row.warmup .wu-start-btn:active { transform: translateY(0); }
+    .today .task-row.warmup .wu-start-arrow {
+      display: inline-block;
+      transition: transform 240ms cubic-bezier(.2,1.2,.3,1);
+    }
+    .today .task-row.warmup .wu-start-btn:hover .wu-start-arrow { transform: translateX(3px); }
+
+    /* WARM-UP pill — soft gold base + Apple-like shimmer sweep */
+    .today .k-pill.k-warmup {
+      position: relative;
+      background: color-mix(in oklab, var(--gold) 12%, var(--paper));
+      color: var(--gold);
+      border: 1px solid color-mix(in oklab, var(--gold) 28%, transparent);
+      padding: 3px 10px 3px 7px;
+      overflow: hidden;
+    }
+    .today .k-pill.k-warmup::before {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(100deg,
+        transparent 0%,
+        transparent 40%,
+        color-mix(in oklab, var(--gold) 32%, transparent) 50%,
+        transparent 60%,
+        transparent 100%);
+      transform: translateX(-100%);
+      animation: wuPillShimmer 4800ms ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes wuPillShimmer {
+      0%, 70% { transform: translateX(-100%); }
+      85%     { transform: translateX(100%); }
+      100%    { transform: translateX(100%); }
+    }
+
+    /* Dark mode — single soft gold wash, nothing else */
+    :root[data-theme="dark"] .today .task-row.warmup {
+      background: color-mix(in oklab, var(--gold) 5%, var(--paper));
+      border-color: color-mix(in oklab, var(--gold) 20%, var(--line));
+    }
+    :root[data-theme="dark"] .today .task-row.warmup .wu-card-ico {
+      background: color-mix(in oklab, var(--gold) 14%, var(--paper));
+    }
+
     /* ---- Spaced-repetition revisit row (REDO) ---- */
     .today .task-row.revisit {
       position: relative;
+      padding-left: 12px;    /* breathing room between red bar and checkbox */
       background: linear-gradient(90deg, color-mix(in oklab, var(--red) 7%, transparent), transparent 60%);
     }
     .today .task-row.revisit::before {
-      content: ""; position: absolute; left: 0; top: 10px; bottom: 10px;
+      content: ""; position: absolute; left: 2px; top: 10px; bottom: 10px;
       width: 3px; background: var(--red); border-radius: 2px;
     }
 
@@ -1132,10 +2052,21 @@ function styles() {
       display: inline-flex; align-items: center; justify-content: center;
       transition: all var(--dur-fast) var(--ease);
       padding: 0;
+      position: relative; z-index: 2;
+      pointer-events: auto !important;    /* beat any parent disable rule — must be clickable */
     }
     .today .checkbox:hover { border-color: var(--blue); }
     .today .checkbox.done { background: var(--green); border-color: var(--green); color: #fff; }
     .today .checkbox.done::after { content: "✓"; font-size: 13px; font-weight: 800; }
+    /* Done rows: hovering the green ✓ shows an "undo" affordance so it's obvious it's clickable */
+    .today .task-row.done .checkbox.done {
+      cursor: pointer;
+    }
+    .today .task-row.done .checkbox.done:hover {
+      background: var(--red); border-color: var(--red);
+      transform: scale(1.08);
+    }
+    .today .task-row.done .checkbox.done:hover::after { content: "↶"; }
 
     .today .add-row {
       display:flex; align-items:center; gap: var(--s-3);
@@ -1152,8 +2083,8 @@ function styles() {
     }
     .today .add-row .plus:hover { color: var(--blue); border-color: var(--blue); border-style: solid; }
     .today .add-row .plus.expanded {
-      background: var(--blue); color: #fff; border-color: var(--blue); border-style: solid;
-      transform: rotate(45deg);
+      background: color-mix(in oklab, var(--blue) 10%, transparent);
+      color: var(--blue); border-color: var(--blue); border-style: solid;
     }
     .today .add-row input {
       flex: 1; border: none; outline: none; background: transparent;
@@ -1387,6 +2318,55 @@ function styles() {
       border-color: var(--gold); color: var(--gold); background: var(--gold-soft);
     }
 
+    /* ---- History button + popup ---- */
+    .today .plan-title { display: inline-flex; align-items: center; gap: 10px; }
+    .today .hist-btn {
+      padding: 4px 8px; background: var(--bg); border: 1px solid var(--line);
+      border-radius: 8px; cursor: pointer; font-size: 14px;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .today .hist-btn:hover { background: var(--gold-soft); border-color: var(--gold); }
+    .hist-pop {
+      position: fixed; z-index: 500;
+      background: var(--paper); border: 1px solid var(--line);
+      border-radius: 12px; padding: 6px; min-width: 240px;
+      box-shadow: 0 20px 44px rgba(0,0,0,.14);
+      animation: histPop 180ms cubic-bezier(.2,1.2,.3,1);
+    }
+    @keyframes histPop {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .hist-pop .hist-head {
+      padding: 10px 12px 6px; font: 700 10.5px/1 var(--font-sans);
+      letter-spacing: .1em; text-transform: uppercase; color: var(--mut);
+    }
+    .hist-pop .hist-item {
+      display: flex; justify-content: space-between; align-items: center;
+      width: 100%; padding: 10px 12px; background: transparent;
+      border: none; border-radius: 8px; cursor: pointer;
+      font: 500 13px/1 var(--font-sans); color: var(--ink);
+      transition: background var(--dur-fast) var(--ease);
+    }
+    .hist-pop .hist-item:hover { background: var(--bg); }
+    .hist-pop .hist-item .hi-date { font-weight: 600; }
+    .hist-pop .hist-item .hi-stat { font-size: 11.5px; color: var(--mut); font-variant-numeric: tabular-nums; }
+    .hist-pop .hist-item.hi-green .hi-stat { color: var(--green); }
+    .hist-pop .hist-item.hi-amber .hi-stat { color: var(--gold); }
+    .hist-pop .hist-item.hi-red   .hi-stat { color: var(--red); }
+    .hist-toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      padding: 10px 18px; background: var(--ink); color: var(--paper);
+      border-radius: 999px; font: 600 12.5px/1 var(--font-sans);
+      z-index: 500;
+    }
+
+    .today .next-day-banner.past-banner {
+      background: linear-gradient(135deg, color-mix(in oklab, var(--blue) 10%, transparent), color-mix(in oklab, var(--blue) 4%, transparent));
+      border-color: var(--blue);
+    }
+    .today .next-day-banner.past-banner .nd-text b { color: var(--blue); }
+
     /* ---- Micro-confetti (★5 burst) ---- */
     .micro-confetti {
       position: fixed; z-index: 9999;
@@ -1394,6 +2374,274 @@ function styles() {
       pointer-events: none; user-select: none;
       text-shadow: 0 0 8px color-mix(in oklab, var(--gold) 60%, transparent);
       will-change: transform, opacity;
+    }
+
+    /* ---- Suggest a task button (below plan rows, above add row) ---- */
+    .today .suggest-row {
+      display: flex; justify-content: center; align-items: center; gap: 8px;
+      margin: 14px 0 10px;
+      position: relative;
+    }
+    .today .more-wrap { position: relative; display: inline-block; }
+    .today .more-btn {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: var(--paper); border: 1px solid var(--line);
+      color: var(--mut); cursor: pointer;
+      font: 700 16px/1 var(--font-sans); letter-spacing: 2px;
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .today .more-btn:hover {
+      color: var(--ink); border-color: var(--line2);
+      transform: translateY(-1px);
+    }
+    .today .more-pop {
+      position: absolute; bottom: calc(100% + 10px); right: -2px;
+      z-index: 60;
+      min-width: 280px; max-width: 320px;
+      background: var(--paper); border: 1px solid var(--line);
+      border-radius: 14px; padding: 6px;
+      box-shadow: 0 24px 48px rgba(0,0,0,.16), 0 0 0 1px color-mix(in oklab, var(--line) 60%, transparent);
+      animation: morePopIn 200ms cubic-bezier(.2,1.2,.3,1);
+    }
+    /* Little triangle pointer at the bottom-right, points at the ⋯ button */
+    .today .more-pop::after {
+      content: ""; position: absolute;
+      bottom: -7px; right: 14px;
+      width: 12px; height: 12px;
+      background: var(--paper);
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      transform: rotate(45deg);
+      border-radius: 0 0 3px 0;
+    }
+    @keyframes morePopIn {
+      from { opacity: 0; transform: translateY(4px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .today .more-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      width: 100%; padding: 10px 12px; background: transparent;
+      border: none; border-radius: 8px; cursor: pointer;
+      font: inherit; color: var(--ink); text-align: left;
+      transition: background .18s;
+    }
+    .today .more-item:hover { background: var(--bg); }
+    .today .more-item .mi-ic {
+      width: 28px; height: 28px; flex-shrink: 0;
+      border-radius: 8px;
+      background: color-mix(in oklab, var(--red) 10%, transparent);
+      color: var(--red);
+      display: inline-flex; align-items: center; justify-content: center;
+      font: 700 14px/1 var(--font-sans);
+    }
+    .today .more-item .mi-ic.mi-ic-lc {
+      background: color-mix(in oklab, var(--gold) 14%, transparent);
+      color: var(--gold);
+      font: 700 10px/1 var(--font-sans); letter-spacing: .04em;
+    }
+    .today .more-item .mi-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .today .more-item .mi-main b { font-size: 13px; font-weight: 700; color: var(--ink); }
+    .today .more-item .mi-main small { font-size: 11.5px; color: var(--mut); }
+
+    .row-toast {
+      position: fixed; bottom: 32px; left: 50%; transform: translate(-50%, 16px);
+      padding: 12px 20px; background: var(--ink); color: var(--paper);
+      border-radius: 999px; font: 600 13px/1 var(--font-sans);
+      z-index: 1400; opacity: 0;
+      box-shadow: 0 12px 32px rgba(0,0,0,.3);
+      transition: all .24s cubic-bezier(.2,1.2,.3,1);
+    }
+    .row-toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .today .suggest-btn {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 10px 20px;
+      background: var(--paper);
+      border: 1px dashed color-mix(in oklab, var(--gold) 36%, var(--line));
+      border-radius: 999px;
+      color: var(--mut);
+      font: 600 12.5px/1 var(--font-sans); letter-spacing: -.005em;
+      cursor: pointer;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .today .suggest-btn:hover {
+      border-color: var(--gold); color: var(--gold);
+      background: color-mix(in oklab, var(--gold) 6%, var(--paper));
+      transform: translateY(-1px);
+    }
+    .today .suggest-btn .sb-ic {
+      font-size: 14px; color: var(--gold);
+      animation: sbPulse 3200ms ease-in-out infinite;
+    }
+    @keyframes sbPulse {
+      0%, 100% { opacity: .7; transform: scale(1); }
+      50%      { opacity: 1;  transform: scale(1.14); }
+    }
+    .today .suggest-btn .sb-text { color: var(--ink); font-weight: 600; }
+    .today .suggest-btn .sb-hint {
+      color: var(--mut); font-size: 10.5px; font-weight: 500;
+      padding-left: 10px; border-left: 1px solid var(--line);
+    }
+    .today .suggest-row.glow .suggest-btn {
+      border-style: solid; border-color: var(--gold);
+      background: color-mix(in oklab, var(--gold) 10%, var(--paper));
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--gold) 55%, transparent);
+      animation: sbGlow 1800ms ease-in-out infinite;
+    }
+    .today .suggest-row.glow .sb-ic { animation-duration: 1600ms; }
+    @keyframes sbGlow {
+      0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--gold) 45%, transparent); }
+      50%      { box-shadow: 0 0 0 10px color-mix(in oklab, var(--gold) 0%, transparent); }
+    }
+
+    /* SUGGESTED pill — purple-gold, differentiates from NEW/REDO */
+    .today .k-pill.k-suggested {
+      background: linear-gradient(135deg,
+        color-mix(in oklab, var(--gold) 14%, var(--paper)),
+        color-mix(in oklab, var(--blue) 10%, var(--paper)));
+      color: var(--gold);
+      border: 1px solid color-mix(in oklab, var(--gold) 32%, transparent);
+    }
+
+    /* ---- Review-override strip ("Bring it back?") ---- */
+    .today .review-strip {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+      margin-top: 8px; padding: 8px 10px;
+      background: color-mix(in oklab, var(--blue) 5%, var(--paper));
+      border: 1px dashed color-mix(in oklab, var(--blue) 28%, transparent);
+      border-radius: 10px;
+      animation: slideDownFade 220ms cubic-bezier(.2,1.2,.3,1) both;
+    }
+    .today .review-strip .rs-label {
+      font-size: 11px; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--mut); margin-right: 6px;
+    }
+    .today .review-strip .rs-chip {
+      padding: 5px 11px; background: var(--paper); border: 1px solid var(--line);
+      color: var(--mut); font: 600 11.5px/1 var(--font-sans);
+      border-radius: 999px; cursor: pointer;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .today .review-strip .rs-chip:hover {
+      color: var(--blue); border-color: var(--blue); background: var(--blue-soft);
+      transform: translateY(-1px);
+    }
+    .today .review-strip .rs-chip-done:hover {
+      color: var(--green); border-color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .today .review-set {
+      display: inline-flex; align-items: center; gap: 7px;
+      margin-top: 7px;
+      font-size: 11.5px; color: var(--mut);
+    }
+    .today .review-set b { color: var(--blue); font-weight: 700; }
+    .today .review-set .rs-set-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--blue);
+    }
+    .today .review-set .rs-undo {
+      background: transparent; border: none; cursor: pointer;
+      color: var(--mut); font: 500 11px/1 var(--font-sans);
+      text-decoration: underline; text-decoration-color: color-mix(in oklab, var(--mut) 40%, transparent);
+      padding: 0 2px;
+    }
+    .today .review-set .rs-undo:hover { color: var(--ink); text-decoration-color: var(--ink); }
+
+    /* Keyboard-focus visual on a row (j/k nav) */
+    .today .task-row.kb-focus {
+      box-shadow: inset 3px 0 0 var(--blue), 0 0 0 2px color-mix(in oklab, var(--blue) 30%, transparent);
+      background: color-mix(in oklab, var(--blue) 4%, transparent);
+      border-radius: 10px;
+    }
+
+    /* ---- Session timer button ---- */
+    /* Zero-width placeholder for non-study rows so the grid stays consistent. */
+    .today .task-timer-slot { display: inline-block; width: 0; }
+    .today .task-timer {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 9px; margin: 0 2px;
+      background: var(--bg); border: 1px solid var(--line);
+      color: var(--mut); cursor: pointer;
+      font: 600 11px/1 var(--font-sans); font-variant-numeric: tabular-nums;
+      border-radius: 7px;
+      transition: all var(--dur-fast) var(--ease);
+      opacity: 1;    /* always visible — consistent across all study rows */
+    }
+    .today .task-timer:hover {
+      color: var(--ink); border-color: var(--line2);
+      background: var(--paper);
+    }
+    .today .task-timer.running {
+      color: var(--gold); border-color: color-mix(in oklab, var(--gold) 32%, transparent);
+      background: var(--gold-soft);
+    }
+    .today .task-timer.running:hover {
+      border-color: var(--gold);
+    }
+    .today .task-timer .tt-ico { font-size: 10px; line-height: 1; }
+    .today .task-timer .tt-time { letter-spacing: -.01em; }
+    /* Done rows — timer is locked (dim + non-interactive), still shows elapsed */
+    .today .task-row.done .task-timer {
+      opacity: .45; cursor: not-allowed; pointer-events: none;
+      border-style: dashed;
+      background: transparent;
+    }
+
+    /* ---- Done rows — everything locked except the checkbox + delete button ---- */
+    /* Learn chip, timer, Difficulty/LC chips become visibly inert. */
+    .today .task-row.done .hover-chip,
+    .today .task-row.done .task-timer {
+      opacity: .4; pointer-events: none; cursor: default;
+    }
+    /* Row cursor hints: on done rows the title area doesn't act like a button. */
+    .today .task-row.done { cursor: default; }
+    .today .task-row.done .task-main { cursor: default; }
+
+    /* ---- Hover-only chips (difficulty, LC#, freq) ---- */
+    .today .task-title-row {
+      display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;
+    }
+    .today .task-title-row .task-title { flex: 0 1 auto; min-width: 0; }
+    .today .hover-chips {
+      display: inline-flex; align-items: center; gap: 5px;
+      opacity: 0; transform: translateX(-4px);
+      transition: opacity 220ms cubic-bezier(.2,1.2,.3,1), transform 220ms cubic-bezier(.2,1.2,.3,1);
+      pointer-events: none;
+    }
+    .today .task-row:hover .hover-chips,
+    .today .task-row:focus-within .hover-chips {
+      opacity: 1; transform: translateX(0);
+    }
+    .today .hover-chip {
+      padding: 2px 8px; border-radius: 6px;
+      font: 600 10.5px/1.3 var(--font-sans);
+      letter-spacing: .01em; white-space: nowrap;
+      background: color-mix(in oklab, var(--ink) 5%, transparent);
+      color: var(--mut);
+      border: 1px solid color-mix(in oklab, var(--ink) 6%, transparent);
+    }
+    .today .hover-chip.hc-diff.hc-easy   { color: var(--green); background: color-mix(in oklab, var(--green) 10%, transparent); border-color: color-mix(in oklab, var(--green) 20%, transparent); }
+    .today .hover-chip.hc-diff.hc-medium { color: var(--gold); background: color-mix(in oklab, var(--gold) 10%, transparent); border-color: color-mix(in oklab, var(--gold) 22%, transparent); }
+    .today .hover-chip.hc-diff.hc-hard   { color: var(--red); background: color-mix(in oklab, var(--red) 10%, transparent); border-color: color-mix(in oklab, var(--red) 22%, transparent); }
+    .today .hover-chip.hc-lc    { color: var(--blue); background: var(--blue-soft); border-color: color-mix(in oklab, var(--blue) 20%, transparent); font-variant-numeric: tabular-nums; }
+    .today .hover-chip.hc-freq  { color: var(--red); background: color-mix(in oklab, var(--red) 12%, transparent); border-color: color-mix(in oklab, var(--red) 24%, transparent); letter-spacing: .06em; }
+    /* ✦ Learn chip — becomes clickable button; pointer-events override for the chip itself */
+    .today .task-row:hover .hover-chip.hc-learn,
+    .today .task-row:focus-within .hover-chip.hc-learn {
+      pointer-events: auto;
+    }
+    .today .hover-chip.hc-learn {
+      cursor: pointer; font: 600 10.5px/1.3 var(--font-sans);
+      color: var(--gold); background: color-mix(in oklab, var(--gold) 10%, transparent);
+      border-color: color-mix(in oklab, var(--gold) 22%, transparent);
+    }
+    .today .hover-chip.hc-learn:hover {
+      background: color-mix(in oklab, var(--gold) 18%, transparent);
+      border-color: var(--gold);
+      transform: translateY(-1px);
     }
 
     /* ---- NEW / REDO pills (kind indicators on task rows) ---- */
@@ -1412,6 +2660,11 @@ function styles() {
     .today .k-pill.k-redo {
       background: color-mix(in oklab, var(--red) 14%, transparent);
       color: var(--red);
+    }
+    .today .k-pill.k-carried {
+      background: color-mix(in oklab, var(--blue) 10%, transparent);
+      color: var(--blue);
+      border: 1px solid color-mix(in oklab, var(--blue) 22%, transparent);
     }
     .today .task-row.done .k-pill { opacity: .55; }
   </style>

@@ -212,6 +212,20 @@ function render() {
       }
       .lib tbody tr:hover .open-btn { color: var(--blue); border-color: var(--blue); }
       .lib .open-btn:hover { background: var(--blue); color: #fff !important; }
+      .lib tbody td.open-cell { display: flex; align-items: center; gap: 6px; }
+      .lib .info-btn {
+        width: 28px; height: 28px; border-radius: 6px;
+        border: 1px solid transparent; background: transparent;
+        color: var(--mut); cursor: pointer;
+        display: inline-flex; align-items: center; justify-content: center;
+        font: 500 15px/1 var(--font-sans);
+        opacity: 0; transition: opacity .18s, color .18s, border-color .18s, background .18s;
+      }
+      .lib tbody tr:hover .info-btn { opacity: 1; }
+      .lib .info-btn:hover {
+        color: var(--gold); border-color: color-mix(in oklab, var(--gold) 32%, transparent);
+        background: color-mix(in oklab, var(--gold) 10%, transparent);
+      }
 
       /* give each column a sane min-width so cells never truncate names mid-word */
       .lib col.c-open       { width: 48px; }
@@ -646,7 +660,10 @@ function paintTable(root) {
             const stat = statusCol ? String(r[statusCol] || "").toUpperCase() : "";
             const rowCls = stat === "SOLVED" ? "r-solved" : stat === "AGAIN" ? "r-again" : stat === "REVIEW" ? "r-review" : "";
             return `<tr data-row-index="${i}" class="${rowCls}">
-              <td class="open-cell"><button class="open-btn" data-open="${i}" aria-label="Open problem">→</button></td>
+              <td class="open-cell">
+                <button class="open-btn" data-open="${i}" aria-label="Open problem" title="Open problem">→</button>
+                <button class="info-btn" data-learn="${i}" aria-label="Learn this topic" title="Teacher-mode lesson (Groq)">ℹ</button>
+              </td>
               ${headers.map(h => renderCell(h, r[h], { statusCol, patternCol, freqCol, confCol, dateCol })).join("")}
               <td class="del-cell"><button class="del-btn" data-del="${i}" aria-label="Delete row">×</button></td>
             </tr>`;
@@ -661,6 +678,15 @@ function paintTable(root) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       location.hash = `#problem/${encodeURIComponent(active)}/${btn.dataset.open}`;
+    });
+  });
+
+  // learn-this-topic click (opens Groq lesson modal in-place, no navigation)
+  el.querySelectorAll(".info-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const { openLessonModal } = await import("./lesson.js");
+      openLessonModal({ sheetName: active, rowIndex: Number(btn.dataset.learn) });
     });
   });
 

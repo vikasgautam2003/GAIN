@@ -99,6 +99,58 @@ export function priceTask(task, settings) {
   return Math.max(taskMin, Math.min(taskMax, Math.round(raw / 10) * 10));
 }
 
+// --- Carry-over at rollover (Phase 8) ---
+// Any TODO task on yesterday's plan auto-rolls into today with `carried: true`.
+// Debounced via localStorage so re-mounts don't duplicate. Returns the count added.
+export async function carryOverUnfinished(dateKey = todayKey()) {
+  const dayLog = getDayLog();
+  const today = dayLog[dateKey];
+  if (!today || !Array.isArray(today.assigned)) return 0;
+  const flagKey = `gain:carriedOn:${dateKey}`;
+  try { if (localStorage.getItem(flagKey) === "1") return 0; } catch (_) {}
+
+  // Find yesterday's calendar key by subtracting 1 day from dateKey
+  const parts = dateKey.split("-").map(Number);
+  const yd = new Date(Date.UTC(parts[0], parts[1]-1, parts[2]));
+  yd.setUTCDate(yd.getUTCDate() - 1);
+  const yesterdayKey = `${yd.getUTCFullYear()}-${String(yd.getUTCMonth()+1).padStart(2,"0")}-${String(yd.getUTCDate()).padStart(2,"0")}`;
+  const yesterday = dayLog[yesterdayKey];
+  if (!yesterday || !Array.isArray(yesterday.assigned)) {
+    try { localStorage.setItem(flagKey, "1"); } catch (_) {}
+    return 0;
+  }
+
+  const undone = yesterday.assigned.filter(t => !(yesterday.done || []).includes(t.ref));
+  // Skip warm-ups and non-persistent kinds — they're meant to be fresh each day
+  const nonSkippable = undone.filter(t => !["warmup", "revision", "log"].includes(t.kind));
+  if (!nonSkippable.length) {
+    try { localStorage.setItem(flagKey, "1"); } catch (_) {}
+    return 0;
+  }
+
+  const existingKeys = new Set(today.assigned
+    .filter(t => t.sheet && t.rowIndex != null)
+    .map(t => `${t.sheet}#${t.rowIndex}`));
+
+  const { updateDayLog } = await import("./store.js");
+  let added = 0;
+  await updateDayLog(dl => {
+    const d = dl[dateKey];
+    if (!d) return;
+    for (const t of nonSkippable) {
+      const key = t.sheet && t.rowIndex != null ? `${t.sheet}#${t.rowIndex}` : null;
+      if (key && existingKeys.has(key)) continue;
+      const newRef = `${t.ref}-carried-${dateKey}`;
+      if (d.assigned.some(x => x.ref === newRef)) continue;
+      d.assigned.push({ ...t, ref: newRef, carried: true });
+      d.values[newRef] = t.value;
+      added++;
+    }
+  });
+  try { localStorage.setItem(flagKey, "1"); } catch (_) {}
+  return added;
+}
+
 // Pick today's tasks. Idempotent — stores the plan in dayLog so page refresh keeps it.
 export async function ensureDailyPlan(dateKey = todayKey()) {
   const dayLog = getDayLog();
@@ -160,10 +212,39 @@ export function getConfidence(dateKey, ref) {
   return day?.confidence?.[ref];
 }
 
+// --- Review override: user's explicit "when to see this again" choice --
+export async function setReviewOverride(dateKey, ref, choice) {
+  const valid = ["default", "tomorrow", "in3days", "mastered"];
+  if (!valid.includes(choice)) return;
+  const { updateDayLog } = await import("./store.js");
+  await updateDayLog(dl => {
+    const d = dl[dateKey];
+    if (!d) return;
+    d.reviewOverride = d.reviewOverride || {};
+    if (choice === "default") delete d.reviewOverride[ref];
+    else d.reviewOverride[ref] = choice;
+  });
+}
+
+export function getReviewOverride(dateKey, ref) {
+  const day = getDayLog()[dateKey];
+  return day?.reviewOverride?.[ref];
+}
+
 // --- Spaced-repetition queue ---------------------------------------------
 // Interval schedule — lower confidence returns sooner. Confidence 4/5 skips.
 // Returns the base-interval (days) for FIRST revisit after a solve.
 const REVISIT_INTERVAL_DAYS = { 1: 1, 2: 3, 3: 7, 4: -1, 5: -1 };
+
+// Explicit review override — the user can override spaced-rep by clicking a
+// chip after rating ("Tomorrow" / "In 3 days" / "Never — mastered"). Default
+// means use rating-based schedule above.
+export const REVIEW_OVERRIDE_DAYS = {
+  tomorrow: 1,
+  in3days: 3,
+  mastered: -1,
+  // "default" => no override, falls back to REVISIT_INTERVAL_DAYS[rating]
+};
 
 // Scan every past dayLog entry, newest-first, and surface sheet-linked solves
 // whose next-due date is on or before `dateKey`. Only one entry per sheet row
@@ -189,7 +270,10 @@ export function getDueRevisits(dateKey) {
       const key = `${task.sheet}#${task.rowIndex}`;
       if (latestSolve.has(key)) continue;  // already saw a newer solve
       const conf = entry.confidence?.[task.ref] ?? 3;
-      const base = REVISIT_INTERVAL_DAYS[conf];
+      const override = entry.reviewOverride?.[task.ref];
+      const base = (override && REVIEW_OVERRIDE_DAYS[override] !== undefined)
+        ? REVIEW_OVERRIDE_DAYS[override]
+        : REVISIT_INTERVAL_DAYS[conf];
       let dueOn = null;
       if (base && base > 0) {
         dueOn = parseKey(d);
@@ -474,7 +558,45 @@ function allDone(day) {
   return day.assigned && day.assigned.length > 0 && day.assigned.every(t => day.done.includes(t.ref));
 }
 
+// --- Daily earning cap (Phase 7) -----------------------------------------
+// Returns {amount, capped, originalAmount} — cap the value a task can bank today.
+// Reads today's "task" ledger entries and clamps so the sum never exceeds the cap.
+export function capTaskValue(wallet, settings, taskValue, dateKey) {
+  const cap = Number(settings?.wallet?.dailyEarningCap || 0);
+  if (!cap) return { amount: taskValue, capped: false };
+  const key = dateKey || calendarKey();
+  const alreadyEarned = (wallet?.ledger || [])
+    .filter(e => e.type === "task" && new Date(e.date).toISOString().slice(0, 10) === key)
+    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const remaining = Math.max(0, cap - alreadyEarned);
+  if (remaining >= taskValue) return { amount: taskValue, capped: false };
+  return { amount: remaining, capped: true, originalAmount: taskValue };
+}
+
+// --- Perfect-week bonus (9D) ---------------------------------------------
+// Counts consecutive green/frozen days ending with `dateKey`. If count >= N
+// and count % N === 0 and this milestone hasn't been awarded, returns the bonus.
+export function maybeFirePerfectWeek(dayLog, dateKey, settings) {
+  const bonus = Number(settings?.wallet?.perfectWeekBonus || 0);
+  const days = Number(settings?.wallet?.perfectWeekDays || 5);
+  if (bonus <= 0 || days < 2) return null;
+  if (dayLog[dateKey]?.perfectWeekAwarded) return null;
+  const cursor = new Date(dateKey + "T12:00:00");
+  let count = 0;
+  for (let i = 0; i < 365; i++) {
+    const key = calendarKey(cursor);
+    const d = dayLog[key];
+    if (!d?.assigned?.length) break;
+    if (!(d.green || d.frozen)) break;
+    count++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  if (count < days || count % days !== 0) return null;
+  return { bonus, count };
+}
+
 // --- streak (greenDay chain ending today; 0-task days don't break) ---
+// Frozen days (protected by a Streak Freeze token) count as green for the chain.
 export function computeStreak(dayLog = getDayLog(), today = new Date()) {
   let streak = 0;
   const cursor = new Date(today);
@@ -483,7 +605,7 @@ export function computeStreak(dayLog = getDayLog(), today = new Date()) {
     const d = dayLog[key];
     if (!d || !d.assigned || !d.assigned.length) {
       // 0-task day → neutral, don't break
-    } else if (d.green) {
+    } else if (d.green || d.frozen) {
       streak++;
     } else {
       break;

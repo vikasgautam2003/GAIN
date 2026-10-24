@@ -56,6 +56,10 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
     perfectDayBonus: 0,
     weekBonus: 1000, monthBonus: 3000,
     streak30: 1500, streak100: 5000,
+    streakFreezePrice: 500,         // cost to buy one Streak Freeze token
+    perfectWeekBonus: 500,          // one-time ₹ bonus for 5 green days in a row (9D)
+    perfectWeekDays: 5,             // consecutive-green threshold for the bonus (configurable)
+    dailyEarningCap: 0,             // 0 = no cap. Positive int = max ₹/day from solve ledger entries.
     withdrawCapMode: "tasks", withdrawCapValue: null,
     // Shop tier unlock thresholds (lifetime ₹ earned to unlock)
     tierUnlocks: { small: 20, medium: 500, large: 2000, mega: 5000 }
@@ -81,7 +85,8 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
 const DEFAULT_WALLET = {
   earned: 0, spent: 0, available: 0, ledger: [],
   dailyWithdrawn: {},  // { "2026-10-18": 2 }  task-based cap tracker
-  wishlist: []         // array of reward ids, in chain order
+  wishlist: [],        // array of reward ids, in chain order
+  freezeTokens: 0,     // Phase 7: streak-freeze tokens — buy from Shop or topbar, apply to protect a non-green day
 };
 
 const DEFAULT_DAY_LOG = {};
@@ -1093,7 +1098,7 @@ export const secure = {
 
 // --------- Groq (butler) proxy passthrough ---------
 // Reads the key from the macOS Keychain (prefer new "groq_api_key", fall back to legacy "grok_api_key").
-export async function callGrok({ system, user, apiKey, model, temperature, jsonMode }) {
+export async function callGrok({ system, user, apiKey, model, temperature, jsonMode, maxTokens }) {
   const key = apiKey ?? (await secure.get("groq_api_key")) ?? (await secure.get("grok_api_key"));
   return invoke("call_grok", {
     req: {
@@ -1102,7 +1107,21 @@ export async function callGrok({ system, user, apiKey, model, temperature, jsonM
       temperature: temperature ?? state.settings.grok.temperature,
       system: system || state.settings.grok.masterPrompt,
       user: user || "",
-      json_mode: !!jsonMode
+      json_mode: !!jsonMode,
+      max_tokens: maxTokens ?? null
+    }
+  });
+}
+
+// SerpAPI proxy — routes through Rust because serpapi.com doesn't send CORS headers.
+// `engine` must be "google_images" or "youtube" (Rust validates).
+export async function serpSearch({ engine, query, apiKey }) {
+  const key = apiKey ?? (await secure.get("serpapi_key"));
+  return invoke("serp_search", {
+    req: {
+      api_key: key || "",
+      engine,
+      query
     }
   });
 }
@@ -1211,7 +1230,7 @@ async function persistSolutions() {
 window.__GAIN__ = {
   state, getSettings, getSheet, getSheets, getWallet, getDayLog,
   updateSettings, updateWallet, updateDayLog, updateSheetRow,
-  addSheet, removeSheet, callGrok, secure, boot,
+  addSheet, removeSheet, callGrok, serpSearch, secure, boot,
   getMotivations, getMotivationCounts, addMotivations, clearUserMotivations,
   getShopQuotes, getShopQuoteCounts, getShopQuote, addShopQuotes, clearUserShopQuotes,
   getRewards, addReward, updateReward, removeReward,

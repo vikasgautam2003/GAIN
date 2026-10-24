@@ -1,4 +1,4 @@
-# GAIN
+# GAIN · v0.1
 
 **A gamified, Jianghu-styled interview-prep OS for FDE / SaaS engineering roles.**
 Built as a native macOS desktop app with Tauri + vanilla JS. One codebase, no bundler, zero cruft — every tick, every rating, every ₹ you bank is written to disk.
@@ -168,6 +168,52 @@ Everything lives on disk, written on every change (debounced where safe, immedia
 3. **One button per intent.** `+ Add` opens a modal with a shape picker rather than three ambient buttons.
 4. **The 7 PM boundary is sacred.** Not midnight. Gives one usable workday + evening window.
 5. **No hidden state.** If it affects the day, it's visible in the countdown chip, the risk banner, or the plan rows.
+
+---
+
+## What's shipped in v0.1
+
+Everything in the sections above, plus the following phases that landed on `main`:
+
+### Study loop · Phase 5
+- **Lesson modal** — Groq-powered teacher-mode lesson per sheet row. Kind-aware section schema (DSA / SD / SQL / Int / Ext). Setup paragraph + bullets per section. 🧰 Toolkit (structures + algorithms) always closes. Inline SerpAPI diagrams (2 per lesson) + YouTube explainer via SerpAPI with Error 153 fallback + fullscreen (`f` key). Cached forever per sheet row.
+- **Grimoire export** — one Settings button → single `.md` with every solve, note, KeyIdea, saved lesson, grouped by Sheet → Pattern → Problem. Table of contents + anchor links.
+- **Pattern mastery dashboard** on Progress — per-pattern confidence average + solve coverage + trend arrow (↗ rising / → steady / ↘ shaky, computed from last 5 vs prior 5).
+- **Session timer per task** — ▶ chip on study rows, click to start/pause, writes real focused minutes to `dayLog.timeOnTask`. Auto-pauses on tick. Fully manual (no app-blur pause — reflects reality).
+
+### Honest signal · 9A/9B/9C/9D/9E/9G
+- **9A Review-override chips** — right after rating, a thin strip appears: `[Default] [Tomorrow] [In 3 days] [Mastered]`. Overrides spaced-rep.
+- **9B Calibration tile** on Progress — "Self-rating accuracy: 78%". Expand → per-pattern grid colored red (over), blue (under), green (fair).
+- **9C ✦ Peek the pattern** on Problem page — Groq returns pattern name only; bounty drops to minimum; `peeked: true` persisted per-row in localStorage; ledger entry flagged.
+- **9D Perfect-week bonus** — N consecutive green days = one-time ₹ bonus. Fires at every N-th day of the chain. Bonus amount + N configurable in Settings → Wallet.
+- **9E Weekly review export** — Groq reflects on last 7 days (300 words, honest-mentor voice). Downloads as `.md`.
+- **9G LeetCode URL quick-add** — paste `leetcode.com/problems/foo-bar/` → Groq extracts title + LC# + pattern + difficulty → appends to DSA sheet (idempotent) + adds to today's plan.
+
+### Economy · Phase 7
+- **🧊 Streak-freeze token** — buy from the 🔥 topbar chip with a confirmation. Price configurable in Settings. Applies to one non-green day → day flipped to `frozen: true` → counts as green for streak + perfect-week.
+- **Daily earnings cap** — Settings-configurable (0 = off). Caps the daily solve-earning sum; excess shows a toast and ledger carries `cappedFrom`.
+- **Perfect-week bonus** (same as 9D).
+
+### Flow · Phase 8
+- **Keyboard nav** — `j`/`k`/↑↓ to focus rows, `space`/`enter` to tick, `?` opens the Glossary, `⌘⇧B` toggles sidebar. Hands off typing fields and modals.
+- **Carry-over at rollover** — undone tasks from yesterday auto-roll into today with a blue `⤼ CARRIED` pill. Debounced per-day in localStorage.
+- **Monday weekly-plan nudge** — on Monday after 19:00 IST, if no plan for this week, floating gold toast with `[Open →]` → routes to Weekly plan page. One-shot per week.
+
+### Core interactions
+- **Suggest a task** — ⋯ button next to the gold Suggest pill. Bulletproof: Groq picks by INDEX (1-30, impossible to hallucinate off-pool). Visible provenance line "From your DSA sheet · picked from 23 candidates (out of 450)."
+- **⋯ More dropdown** — floats UP from the button with a pointer tail. Items: `↻ Add a REDO question` (weakest-confidence past solve, cross-sheet) · `LC Paste a LeetCode URL`.
+- **Info popovers everywhere** — small `?` icon next to features that need explaining (calibration bands, pattern mastery trends, review-override chips, peek penalty).
+- **Settings → Glossary** — dashed-gold "What does everything mean?" button opens a full 4-section catalog of every GAIN feature with 2-3 sentence explanations.
+- **Collapsible sidebar** — click `◀` or press `⌘⇧B`. Icon-only mode with hover-tooltips. State persisted.
+
+### Rhythm fixes
+- **7 PM IST rollover** (was 3 PM) — 24-hour window ending at 19:00 IST
+- **Uncheck on done rows** — green ✓ turns red with `↶` glyph on hover for the undo affordance
+- **Spacing fix** — REDO rows get `padding-left: 12px` so the red bar doesn't touch the checkbox
+- **Hover-reveal LC# / Difficulty / HIGH chips** on each DSA row (classy; `pointer-events: none` so no accidental clicks)
+- **Topbar rollover countdown** `⏱ 4h 12m` with calm/warn/urgent color escalation
+- **Nav badges** — Today (open count), Library (`448 · 112` total · solved), Shop (♡ wishlist count)
+- **Nav Today ✓** when all done — subtle green pop
 
 ---
 

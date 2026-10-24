@@ -10,8 +10,14 @@
 </head>
 <body>
   <div id="app" class="app">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-x">✕</span><span class="brand-name">GAIN</span></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="brand-x">✕</span>
+        <span class="brand-name">GAIN</span>
+        <button class="sidebar-toggle" id="sidebar-toggle" title="Collapse sidebar (⌘ ⇧ B)" aria-label="Toggle sidebar">
+          <span class="st-ic">◀</span>
+        </button>
+      </div>
       <nav class="nav" id="nav">
         <a href="#dashboard" data-route="dashboard"><span class="nav-ic">🏠</span><span class="nav-label">Dashboard</span></a>
         <a href="#today"     data-route="today"><span class="nav-ic">📅</span><span class="nav-label">Today</span><span class="nav-badge" id="nb-today" hidden></span></a>
@@ -32,7 +38,13 @@
           <input id="search" placeholder="Search tasks, topics, or notes…" />
           <kbd>⌘K</kbd>
         </div>
-        <div class="streak" id="streak"><span class="flame">🔥</span><span id="streak-n">0</span> day streak</div>
+        <div class="streak" id="streak" title="Click to manage streak freeze"><span class="flame">🔥</span><span id="streak-n">0</span> day streak</div>
+        <div class="streak-pop" id="streak-pop" hidden></div>
+        <div class="divider"></div>
+        <div class="tb-countdown" id="tb-countdown" title="Time left until 7 PM IST rollover">
+          <span class="tbc-ico">⏱</span>
+          <span class="tbc-time" id="tbc-time">—</span>
+        </div>
         <div class="divider"></div>
         <div class="coin" id="coin"><span class="coin-sym">🪙</span> <b id="coin-n">0</b></div>
         <button class="btn-primary" id="start-session">Start session ▶</button>

@@ -3,6 +3,8 @@
 
 import { getSheets, getDayLog, getSettings, getWallet, callGrok, secure, on } from "./store.js";
 import { computeStreak, longestStreak, todayKey } from "./engine.js";
+import { paintYear, setHeatmapFilter, getHeatmapFilter } from "./calendar.js";
+import { infoIcon } from "./info.js";
 
 let unsub = null;
 
@@ -18,6 +20,15 @@ export default {
 };
 
 function attach(root) {
+  // Filter tabs for the 365-day chain (shared state with Calendar page via calendar.js)
+  root.querySelectorAll("#filter-tabs .ft").forEach(btn => {
+    btn.addEventListener("click", () => {
+      setHeatmapFilter(btn.dataset.filter);
+      root.querySelectorAll("#filter-tabs .ft").forEach(b => b.classList.toggle("active", b === btn));
+      paintYear(root);
+    });
+  });
+
   root.querySelector("#btn-grok-narrative").addEventListener("click", async (e) => {
     const btn = e.target;
     const narrEl = root.querySelector("#eta-narrative");
@@ -145,6 +156,33 @@ function render() {
         </div>
       </div>
 
+      <section class="calib-card" id="calib-card" aria-expanded="false">
+        <div class="calib-head">
+          <div class="calib-left">
+            <div class="r-eyebrow">SELF-RATING CALIBRATION ${infoIcon({
+              title: "Calibration score",
+              body: "How well your ★ ratings predict re-solve performance. Compares the first ★ rating of a row to its latest ★ rating. Drift of 0 = perfect; drift of 4 = badly over/under-rating.",
+              bullets: [
+                "85% or above = sharp (trust your gut)",
+                "70-84% = solid (within interview-day range)",
+                "55-69% = noisy (you miscalibrate under pressure)",
+                "below 55% = shaky (over-rate hard, under-prepare)"
+              ]
+            })}</div>
+            <div class="calib-value">
+              <span id="calib-pct">—</span>
+              <small class="calib-unit">% accurate</small>
+            </div>
+            <div class="calib-sub" id="calib-sub">—</div>
+          </div>
+          <button class="calib-toggle" id="calib-toggle" title="Expand per-pattern breakdown">
+            <span class="ct-ic">▾</span>
+            <span class="ct-lb">Per-topic</span>
+          </button>
+        </div>
+        <div class="calib-detail" id="calib-detail" hidden></div>
+      </section>
+
       <!-- Predictive analytics (§17) — clean redesign -->
       <section class="insight-card alive" id="insight-card">
         <div class="ic-head">
@@ -178,6 +216,22 @@ function render() {
 
         <div class="ic-weak" id="eta-weak"></div>
         <div class="ic-narrative" id="eta-narrative"></div>
+      </section>
+
+      <section class="prog-card wide chain-section">
+        <div class="pc-head chain-head">
+          <div>
+            <h3>The chain · last 365 days</h3>
+            <span class="pc-sub">Red = missed · greens = solved intensity · gray = no plan yet</span>
+          </div>
+          <div class="filter-tabs" id="filter-tabs">
+            <button class="ft" data-filter="all">All</button>
+            <button class="ft" data-filter="dsa">DSA</button>
+            <button class="ft" data-filter="sd">SD</button>
+            <button class="ft" data-filter="int">INT</button>
+          </div>
+        </div>
+        <div class="year-heatmap chain-grid" id="year-heatmap"></div>
       </section>
 
       <div class="prog-grid">
@@ -215,7 +269,25 @@ function render() {
           </div>
           <div id="pattern-bars"></div>
         </section>
+
+        <section class="prog-card wide pattern-mastery-card">
+          <div class="pc-head">
+            <h3>Pattern mastery ${infoIcon({
+              title: "Pattern mastery",
+              body: "Per-pattern average confidence + solve coverage, with a trend arrow comparing your last 5 ratings vs the prior 5. Weakest patterns surface at the top.",
+              bullets: [
+                "↗ rising = last 5 avg >0.4 ★ higher than prior 5",
+                "→ steady = within 0.4 ★ of prior 5",
+                "↘ shaky = last 5 avg >0.4 ★ lower (red-tinted row)"
+              ]
+            })}</h3>
+            <span class="pc-sub">Weakest first · confidence from your star ratings · trend from last 5 solves</span>
+          </div>
+          <div id="pattern-mastery"></div>
+        </section>
       </div>
+
+      <div id="hover-tooltip" class="hover-tip" hidden></div>
 
       ${styles()}
     </div>
@@ -252,6 +324,14 @@ function paint(root) {
   animateNumber(root.querySelector("#streak-val"), computeStreak(dayLog));
   animateNumber(root.querySelector("#longest-val"), longestStreak(dayLog));
 
+  // --- 365-day chain heatmap ---
+  // Reflect current filter in tab active state
+  const filter = getHeatmapFilter();
+  root.querySelectorAll("#filter-tabs .ft").forEach(b => {
+    b.classList.toggle("active", b.dataset.filter === filter);
+  });
+  paintYear(root);
+
   // --- Burn-up line ---
   root.querySelector("#burn-up").innerHTML = burnUpSvg(sheets);
 
@@ -265,6 +345,22 @@ function paint(root) {
 
   // --- Per-pattern bars (DSA only) ---
   root.querySelector("#pattern-bars").innerHTML = patternBarsHtml(sheets["DSA"]);
+
+  // --- Confidence calibration (self-rating accuracy) ---
+  paintCalibration(root, dayLog);
+
+  // --- Pattern mastery (confidence-driven, trend-aware, cross-sheet) ---
+  const masteryEl = root.querySelector("#pattern-mastery");
+  if (masteryEl) {
+    masteryEl.innerHTML = patternMasteryHtml(sheets, dayLog);
+    masteryEl.querySelectorAll("[data-pattern-jump]").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        const sheet = btn.dataset.patternJump;
+        location.hash = `#library/${encodeURIComponent(sheet)}`;
+      });
+    });
+  }
 
   // --- Predictive-analytics card ---
   const r4w = computeRate(sheets, 4);
@@ -582,6 +678,224 @@ function patternBarsHtml(dsa) {
   `).join("");
 }
 
+// --- Self-rating calibration -------------------------------------------
+// For each sheet row with ≥2 confidence ratings (via re-solves / spaced-rep),
+// compute absolute drift between the FIRST rating and the LATEST rating.
+// Low drift = well-calibrated. High drift = you over-rated or under-rated.
+// Score = 100 - clamp(avgDrift * 20, 0, 60) → range 40-100.
+function paintCalibration(root, dayLog) {
+  const headlineEl = root.querySelector("#calib-pct");
+  const subEl      = root.querySelector("#calib-sub");
+  const toggleBtn  = root.querySelector("#calib-toggle");
+  const detailEl   = root.querySelector("#calib-detail");
+  if (!headlineEl) return;
+
+  // Collect per-row rating sequence (chronological).
+  // Key: `${sheet}#${rowIndex}` → [{date, rating, pattern}]
+  const byRow = {};
+  const dates = Object.keys(dayLog).sort();
+  for (const d of dates) {
+    const entry = dayLog[d];
+    if (!entry?.assigned?.length) continue;
+    for (const ref of (entry.done || [])) {
+      const task = entry.assigned.find(t => t.ref === ref);
+      if (!task?.sheet || task.rowIndex == null) continue;
+      const rating = entry.confidence?.[ref];
+      if (!(rating >= 1 && rating <= 5)) continue;
+      const key = `${task.sheet}#${task.rowIndex}`;
+      byRow[key] = byRow[key] || { pattern: task.pattern || "(unlabelled)", ratings: [] };
+      byRow[key].ratings.push({ date: d, rating });
+    }
+  }
+
+  // Compute drifts
+  const perRow = [];
+  for (const [key, data] of Object.entries(byRow)) {
+    if (data.ratings.length < 2) continue;
+    const first = data.ratings[0].rating;
+    const last  = data.ratings[data.ratings.length - 1].rating;
+    perRow.push({ key, pattern: data.pattern, drift: Math.abs(first - last), signed: first - last, n: data.ratings.length });
+  }
+
+  if (perRow.length < 3) {
+    headlineEl.textContent = "—";
+    subEl.innerHTML = `Need <b>at least 3 re-solved problems</b> with confidence ratings to calibrate. Keep rating low-confidence solves — spaced-rep brings them back.`;
+    toggleBtn.hidden = true;
+    detailEl.hidden = true;
+    return;
+  }
+
+  const avgDrift = perRow.reduce((a, r) => a + r.drift, 0) / perRow.length;
+  const avgSigned = perRow.reduce((a, r) => a + r.signed, 0) / perRow.length;
+  const score = Math.max(40, Math.round(100 - avgDrift * 20));
+
+  headlineEl.textContent = score;
+  const tone = avgSigned > 0.6 ? "over-rating" : avgSigned < -0.6 ? "under-rating" : "well-calibrated";
+  const scoreLabel = score >= 85 ? "sharp" : score >= 70 ? "solid" : score >= 55 ? "noisy" : "shaky";
+  subEl.innerHTML = `${perRow.length} re-solved problems · you're <b>${esc(tone)}</b> by <b>${avgDrift.toFixed(1)} ★</b> on average · <b>${esc(scoreLabel)}</b>`;
+
+  // Per-pattern breakdown (expandable)
+  const byPattern = {};
+  for (const r of perRow) {
+    byPattern[r.pattern] = byPattern[r.pattern] || { signed: 0, abs: 0, n: 0 };
+    byPattern[r.pattern].signed += r.signed;
+    byPattern[r.pattern].abs    += r.drift;
+    byPattern[r.pattern].n++;
+  }
+  const patternRows = Object.entries(byPattern)
+    .map(([p, s]) => ({
+      pattern: p,
+      n: s.n,
+      avgAbs: s.abs / s.n,
+      avgSigned: s.signed / s.n,
+      score: Math.max(40, Math.round(100 - (s.abs / s.n) * 20)),
+    }))
+    .sort((a, b) => a.score - b.score);  // worst first
+
+  detailEl.innerHTML = patternRows.map(p => {
+    const biasText = p.avgSigned > 0.4 ? "over-rated" : p.avgSigned < -0.4 ? "under-rated" : "fair";
+    const biasCls = p.avgSigned > 0.4 ? "cb-over" : p.avgSigned < -0.4 ? "cb-under" : "cb-fair";
+    return `
+      <div class="calib-row ${biasCls}">
+        <div class="cr-pat">${esc(p.pattern)}</div>
+        <div class="cr-score">${p.score}%</div>
+        <div class="cr-bias">${biasText} · ${Math.abs(p.avgSigned).toFixed(1)} ★</div>
+        <div class="cr-n">n=${p.n}</div>
+      </div>
+    `;
+  }).join("");
+
+  toggleBtn.hidden = false;
+  toggleBtn.onclick = () => {
+    const expanded = !detailEl.hidden;
+    detailEl.hidden = expanded;
+    toggleBtn.classList.toggle("expanded", !expanded);
+  };
+}
+
+// Pattern mastery — one row per pattern across ALL sheets. Weakest first.
+// Trend arrow compares the last 5 confidence ratings vs the 5 before.
+function patternMasteryHtml(sheets, dayLog) {
+  // 1. Collect confidence timeline per pattern from dayLog.
+  //    Each entry: {date, rating, title, sheet, rowIndex}
+  const timelineByPattern = {};
+  const dates = Object.keys(dayLog).sort();   // chronological
+  for (const d of dates) {
+    const entry = dayLog[d];
+    if (!entry?.assigned?.length) continue;
+    for (const ref of (entry.done || [])) {
+      const task = entry.assigned.find(t => t.ref === ref);
+      if (!task || !task.pattern) continue;
+      const rating = entry.confidence?.[ref];
+      if (!(rating >= 1 && rating <= 5)) continue;
+      timelineByPattern[task.pattern] = timelineByPattern[task.pattern] || [];
+      timelineByPattern[task.pattern].push({ date: d, rating, title: task.title, sheet: task.sheet });
+    }
+  }
+
+  // 2. Collect pattern totals (solved / total count) from sheets. Scan every sheet
+  //    with a Pattern/Category column — so SQL / SD / Int patterns surface too.
+  const bucketsByPattern = {};
+  for (const [sheetName, sheet] of Object.entries(sheets)) {
+    const patternCol = sheet.headers?.find(h => /^(pattern|category)$/i.test(h));
+    const statusCol = sheet.headers?.find(h => /^status$/i.test(h));
+    if (!patternCol) continue;
+    for (const r of sheet.rows) {
+      const p = r[patternCol];
+      if (!p || !String(p).trim()) continue;
+      if (!bucketsByPattern[p]) bucketsByPattern[p] = { total: 0, solved: 0, sheet: sheetName };
+      bucketsByPattern[p].total++;
+      if (statusCol && /^(solved|done)$/i.test(r[statusCol] || "")) bucketsByPattern[p].solved++;
+    }
+  }
+
+  // 3. Merge — compute per-pattern mastery metrics.
+  const allPatterns = new Set([
+    ...Object.keys(timelineByPattern),
+    ...Object.keys(bucketsByPattern),
+  ]);
+  const rows = [];
+  for (const p of allPatterns) {
+    const timeline = timelineByPattern[p] || [];
+    const bucket = bucketsByPattern[p] || { total: 0, solved: 0, sheet: null };
+    const ratings = timeline.map(t => t.rating);
+    const avgConf = ratings.length ? ratings.reduce((a,b) => a+b, 0) / ratings.length : null;
+
+    // Trend from the last 5 vs the prior 5
+    let trend = "steady";
+    let trendDelta = 0;
+    if (ratings.length >= 6) {
+      const last5 = ratings.slice(-5);
+      const prior5 = ratings.slice(-10, -5);
+      const lastAvg = last5.reduce((a,b)=>a+b,0) / last5.length;
+      const priorAvg = prior5.reduce((a,b)=>a+b,0) / prior5.length;
+      trendDelta = lastAvg - priorAvg;
+      if (trendDelta > 0.4) trend = "up";
+      else if (trendDelta < -0.4) trend = "down";
+    } else if (ratings.length >= 2) {
+      // Not enough data for 5v5. Use half-vs-half as a soft fallback.
+      const half = Math.floor(ratings.length / 2);
+      const lastHalf = ratings.slice(-half);
+      const firstHalf = ratings.slice(0, half);
+      const lastAvg = lastHalf.reduce((a,b)=>a+b,0) / lastHalf.length;
+      const firstAvg = firstHalf.reduce((a,b)=>a+b,0) / firstHalf.length;
+      trendDelta = lastAvg - firstAvg;
+      if (trendDelta > 0.5) trend = "up";
+      else if (trendDelta < -0.5) trend = "down";
+    }
+
+    // Mastery score: weighted mix of (confidence/5) and (solved/total).
+    // Weakest first → sort ascending by score.
+    const confScore = avgConf != null ? avgConf / 5 : 0;
+    const coverage = bucket.total ? bucket.solved / bucket.total : 0;
+    const score = ratings.length ? (confScore * 0.6 + coverage * 0.4) : coverage * 0.3;
+
+    rows.push({
+      pattern: p,
+      sheet: bucket.sheet,
+      total: bucket.total,
+      solved: bucket.solved,
+      ratingsCount: ratings.length,
+      avgConf,
+      trend,
+      trendDelta,
+      score,
+    });
+  }
+
+  if (!rows.length) {
+    return `<div class="empty-state"><p>Rate your first few solves (★ 1–5 after any tick) and this grid lights up.</p></div>`;
+  }
+
+  // Sort: weakest first. Patterns with ratings outrank patterns without (we have data).
+  rows.sort((a, b) => {
+    if (a.ratingsCount === 0 && b.ratingsCount > 0) return 1;
+    if (b.ratingsCount === 0 && a.ratingsCount > 0) return -1;
+    return a.score - b.score;
+  });
+
+  return rows.slice(0, 24).map(r => {
+    const pctConf = r.avgConf != null ? Math.round((r.avgConf / 5) * 100) : 0;
+    const confLabel = r.avgConf != null ? `★ ${r.avgConf.toFixed(1)}` : `★ —`;
+    const trendIco = r.trend === "up" ? "↗" : r.trend === "down" ? "↘" : "→";
+    const trendLbl = r.trend === "up" ? "rising" : r.trend === "down" ? "shaky" : (r.ratingsCount ? "steady" : "no data");
+    const sheetJump = r.sheet
+      ? `<button class="pm-jump" data-pattern-jump="${esc(r.sheet)}" title="Open ${esc(r.sheet)} library">↗</button>`
+      : "";
+    return `
+      <div class="pm-row pm-trend-${r.trend}" title="${r.ratingsCount} rated solve${r.ratingsCount === 1 ? "" : "s"}">
+        <div class="pm-name">${esc(r.pattern)}${sheetJump}</div>
+        <div class="pm-bar-wrap">
+          <div class="pm-bar"><span style="width:${pctConf}%"></span></div>
+          <div class="pm-count">${r.solved}/${r.total}</div>
+        </div>
+        <div class="pm-conf">${confLabel}</div>
+        <div class="pm-trend">${trendIco}<small>${trendLbl}</small></div>
+      </div>
+    `;
+  }).join("");
+}
+
 function animateNumber(el, to) {
   if (!el) return;
   const from = parseInt(el.textContent.replace(/[^0-9]/g, "") || "0", 10);
@@ -759,6 +1073,188 @@ function styles() {
       .prog .ic-head { flex-direction: column; align-items: flex-start; }
       .prog .ic-side { align-items: flex-start; }
     }
+
+    /* ---- Confidence calibration card ---- */
+    .prog .calib-card {
+      background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg);
+      padding: 18px 22px; margin: var(--s-4) 0 var(--s-4);
+      box-shadow: var(--shadow);
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prog .calib-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .prog .calib-left { min-width: 0; flex: 1; }
+    .prog .calib-value {
+      font-size: 36px; font-weight: 700; color: var(--ink); letter-spacing: -.02em;
+      display: inline-flex; align-items: baseline; gap: 6px;
+      margin: 4px 0 2px;
+    }
+    .prog .calib-value small { font-size: 14px; font-weight: 500; color: var(--mut); letter-spacing: 0; }
+    .prog .calib-sub { font-size: 13px; color: var(--mut); line-height: 1.5; }
+    .prog .calib-sub b { color: var(--ink); font-weight: 700; }
+    .prog .calib-toggle {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px; background: transparent; border: 1px solid var(--line);
+      border-radius: 10px; cursor: pointer; color: var(--mut);
+      font: 600 12px/1 var(--font-sans);
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prog .calib-toggle:hover { color: var(--ink); border-color: var(--line2); }
+    .prog .calib-toggle .ct-ic { transition: transform .18s; display: inline-block; }
+    .prog .calib-toggle.expanded .ct-ic { transform: rotate(-180deg); }
+
+    .prog .calib-detail {
+      margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line);
+      display: flex; flex-direction: column; gap: 2px;
+      animation: slideDownFade 220ms cubic-bezier(.2,1.2,.3,1) both;
+    }
+    .prog .calib-row {
+      display: grid; grid-template-columns: 1.6fr 60px 140px 60px;
+      align-items: center; gap: 12px;
+      padding: 8px 12px; border-radius: 8px;
+      transition: background .18s;
+    }
+    .prog .calib-row:hover { background: var(--bg); }
+    .prog .calib-row .cr-pat { font-size: 13px; font-weight: 600; color: var(--ink); }
+    .prog .calib-row .cr-score { font-size: 13px; font-weight: 700; color: var(--mut); font-variant-numeric: tabular-nums; }
+    .prog .calib-row .cr-bias { font-size: 11.5px; color: var(--mut); }
+    .prog .calib-row .cr-n { font-size: 11px; color: var(--mut); text-align: right; font-variant-numeric: tabular-nums; }
+    .prog .calib-row.cb-over .cr-score { color: var(--red); }
+    .prog .calib-row.cb-over .cr-bias { color: var(--red); }
+    .prog .calib-row.cb-under .cr-score { color: var(--blue); }
+    .prog .calib-row.cb-under .cr-bias { color: var(--blue); }
+    .prog .calib-row.cb-fair .cr-score { color: var(--green); }
+    .prog .calib-row.cb-fair .cr-bias { color: var(--green); }
+    @media (max-width: 640px) {
+      .prog .calib-row { grid-template-columns: 1fr 1fr; }
+      .prog .calib-row .cr-pat { grid-column: span 2; font-size: 13.5px; }
+    }
+
+    /* ---- Pattern mastery grid (confidence + trend) ---- */
+    .prog .pattern-mastery-card { margin-top: var(--s-4); }
+    .prog .pm-row {
+      display: grid; grid-template-columns: minmax(140px, 1.6fr) minmax(0, 2fr) 56px 72px;
+      align-items: center; gap: var(--s-3);
+      padding: 10px 12px; border-radius: 10px;
+      transition: background .18s;
+    }
+    .prog .pm-row + .pm-row { border-top: 1px solid var(--line); }
+    .prog .pm-row:hover { background: var(--bg); }
+    .prog .pm-name {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 13.5px; font-weight: 600; color: var(--ink);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .prog .pm-jump {
+      opacity: 0; background: transparent; border: none; cursor: pointer;
+      color: var(--mut); font-size: 11.5px; padding: 2px 6px; border-radius: 4px;
+      transition: opacity .18s, color .18s, background .18s;
+    }
+    .prog .pm-row:hover .pm-jump { opacity: 1; }
+    .prog .pm-jump:hover { color: var(--gold); background: var(--gold-soft); }
+    .prog .pm-bar-wrap { display: flex; align-items: center; gap: 10px; }
+    .prog .pm-bar {
+      flex: 1; height: 6px; background: var(--line); border-radius: 4px; overflow: hidden;
+    }
+    .prog .pm-bar span {
+      display: block; height: 100%; border-radius: 4px;
+      background: linear-gradient(90deg,
+        color-mix(in oklab, var(--red) 70%, transparent) 0%,
+        color-mix(in oklab, var(--gold) 70%, transparent) 50%,
+        color-mix(in oklab, var(--green) 70%, transparent) 100%);
+      transition: width .4s cubic-bezier(.2,1,.3,1);
+    }
+    .prog .pm-count { font-size: 11.5px; color: var(--mut); font-variant-numeric: tabular-nums; min-width: 42px; }
+    .prog .pm-conf {
+      font: 700 12px/1 var(--font-sans); color: var(--gold); letter-spacing: -.01em;
+      font-variant-numeric: tabular-nums;
+    }
+    .prog .pm-trend {
+      display: inline-flex; align-items: center; gap: 5px;
+      font: 600 14px/1 var(--font-sans);
+    }
+    .prog .pm-trend small { font-size: 10.5px; font-weight: 500; letter-spacing: .02em; }
+    .prog .pm-trend-up    { }
+    .prog .pm-trend-up .pm-trend    { color: var(--green); }
+    .prog .pm-trend-down .pm-trend  { color: var(--red); }
+    .prog .pm-trend-steady .pm-trend { color: var(--mut); }
+    .prog .pm-row.pm-trend-down { background: color-mix(in oklab, var(--red) 3%, transparent); }
+
+    @media (max-width: 740px) {
+      .prog .pm-row { grid-template-columns: 1fr 1fr; }
+      .prog .pm-bar-wrap { grid-column: 1 / span 2; }
+      .prog .pm-conf, .prog .pm-trend { font-size: 11.5px; }
+    }
+
+    /* ---- 365-day chain heatmap (positioned high — after hero stats) ---- */
+    .prog .chain-section { margin: 20px 0 24px; }
+    .prog .chain-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .prog .filter-tabs { display: flex; gap: 4px; background: var(--line); padding: 3px; border-radius: 10px; }
+    .prog .ft {
+      padding: 6px 12px; border: none; background: transparent; cursor: pointer;
+      font: 600 11px/1 var(--font-sans); letter-spacing: .04em;
+      color: var(--mut); border-radius: 7px; transition: all var(--dur-fast) var(--ease);
+    }
+    .prog .ft:hover { color: var(--ink); }
+    .prog .ft.active { background: var(--paper); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+
+    .prog .year-heatmap { overflow-x: auto; padding: 10px 0 4px; margin-top: 10px; }
+
+    /* Grouped layout — month labels above, dow (Mon/Wed/Fri) left column */
+    .prog .year-grid { display: inline-flex; flex-direction: column; gap: 6px; min-width: 100%; }
+    .prog .year-months {
+      display: flex; align-items: center;
+      font-size: 10.5px; letter-spacing: .06em; color: var(--mut);
+      font-weight: 600;
+    }
+    .prog .year-dow-spacer { width: 28px; flex-shrink: 0; }
+    .prog .year-month-label {
+      flex: 0 0 calc(var(--span) * 16px + (var(--span) - 1) * 3px + 10px);
+      padding-left: 2px;
+      box-sizing: border-box;
+    }
+    .prog .year-rows { display: flex; align-items: flex-start; gap: 0; }
+    .prog .year-dow {
+      display: flex; flex-direction: column; gap: 3px;
+      width: 28px; flex-shrink: 0; padding-top: 1px;
+      font-size: 9.5px; color: var(--mut); font-weight: 600;
+    }
+    .prog .year-dow span { height: 13px; line-height: 13px; }
+    .prog .year-group { display: flex; gap: 3px; align-items: flex-start; }
+    .prog .year-group.month-sep { padding-left: 10px; position: relative; }
+    .prog .year-group.month-sep::before {
+      content: ""; position: absolute; left: 4px; top: 0; bottom: 0;
+      width: 1px; background: color-mix(in oklab, var(--line) 70%, transparent);
+    }
+    .prog .year-col { display: flex; flex-direction: column; gap: 3px; }
+    .prog .ycell {
+      width: 13px; height: 13px; border-radius: 2px;
+      background: var(--line);
+      transition: transform var(--dur-fast) var(--ease);
+    }
+    .prog .ycell:hover { transform: scale(1.6); z-index: 2; box-shadow: 0 0 0 1px var(--ink); }
+    .prog .ycell.future { background: transparent; border: 1px dashed var(--line); box-sizing: border-box; }
+    /* Palette — identical to Calendar's (red=missed, greens=solved intensity) */
+    .prog .ycell.sw-neutral { background: var(--line); }
+    .prog .ycell.sw-missed  { background: color-mix(in oklab, var(--red) 42%, var(--paper)); }
+    .prog .ycell.sw-0       { background: color-mix(in oklab, var(--red) 42%, var(--paper)); }
+    .prog .ycell.sw-1       { background: color-mix(in oklab, var(--green) 32%, var(--paper)); }
+    .prog .ycell.sw-2       { background: color-mix(in oklab, var(--green) 60%, var(--paper)); }
+    .prog .ycell.sw-3       { background: var(--green); opacity: .9; }
+    .prog .ycell.sw-4       { background: var(--green); }
+
+    .prog .hover-tip {
+      position: fixed; z-index: 1000;
+      background: var(--ink); color: var(--paper);
+      padding: 8px 12px; border-radius: 8px;
+      font-size: 12px; line-height: 1.5;
+      pointer-events: none; max-width: 280px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.2);
+    }
+    .prog .hover-tip .tip-green { color: #4ade80; font-weight: 700; letter-spacing: .04em; }
+    .prog .hover-tip .tip-amber { color: #facc15; font-weight: 700; }
+    .prog .hover-tip .tip-dim { color: color-mix(in oklab, var(--paper) 60%, transparent); font-size: 11px; }
+    .prog .hover-tip ul { margin: 4px 0 0; padding-left: 16px; }
+    .prog .hover-tip li.did { color: #4ade80; }
   </style>
   `;
 }

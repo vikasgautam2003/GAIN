@@ -7,6 +7,8 @@ import { todayKey, calendarKey, computeStreak, longestStreak } from "./engine.js
 let unsub = null;
 let cursor = new Date();   // month in view
 let filter = "all";
+export function setHeatmapFilter(f) { filter = f; }
+export function getHeatmapFilter() { return filter; }
 
 export default {
   mount(root) {
@@ -29,8 +31,8 @@ function render() {
 
       <div class="cal-stats stagger" id="cal-stats"></div>
 
-      <div class="cal-grid-wrap">
-        <section class="cal-card month-card">
+      <div class="cal-grid-wrap single">
+        <section class="cal-card month-card wide">
           <header class="cal-head">
             <div>
               <div class="cal-eyebrow" id="month-eyebrow"></div>
@@ -50,23 +52,10 @@ function render() {
             <span class="legend-item"><span class="sw sw-4"></span><small>Green day</small></span>
             <span class="legend-item"><span class="sw sw-neutral"></span><small>No plan</small></span>
           </div>
+          <p class="cal-footnote">
+            365-day chain lives on <a href="#progress" class="hero-link">Progress →</a>
+          </p>
         </section>
-
-        <aside class="cal-card year-card">
-          <header class="cal-head">
-            <div>
-              <div class="cal-eyebrow">LAST 365 DAYS</div>
-              <h2 class="cal-title">The chain</h2>
-            </div>
-            <div class="filter-tabs" id="filter-tabs">
-              <button class="ft ${filter==='all'?'active':''}" data-filter="all">All</button>
-              <button class="ft ${filter==='dsa'?'active':''}" data-filter="dsa">DSA</button>
-              <button class="ft ${filter==='sd'?'active':''}" data-filter="sd">SD</button>
-              <button class="ft ${filter==='int'?'active':''}" data-filter="int">INT</button>
-            </div>
-          </header>
-          <div class="year-heatmap" id="year-heatmap"></div>
-        </aside>
       </div>
 
       <div id="hover-tooltip" class="hover-tip" hidden></div>
@@ -79,7 +68,6 @@ function render() {
 function paint(root) {
   paintStats(root);
   paintMonth(root);
-  paintYear(root);
 }
 
 function paintStats(root) {
@@ -186,7 +174,9 @@ function paintMonth(root) {
   });
 }
 
-function paintYear(root) {
+// Exported: Progress page re-uses this to render the 365-day chain.
+// Looks for #year-heatmap + #hover-tooltip inside the given root.
+export function paintYear(root) {
   const el = root.querySelector("#year-heatmap");
   const dayLog = getDayLog();
   const today = new Date();
@@ -209,16 +199,54 @@ function paintYear(root) {
     cursor.setDate(cursor.getDate() + 7);
   }
 
-  let html = `<div class="year-cols">`;
+  // Group weeks into runs that share a month label. A column's "month" is the
+  // month of its first day. Successive same-month columns form one group.
+  const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const groups = [];
+  let currentMonth = -1, currentGroup = null;
   for (const col of weeks) {
-    html += `<div class="year-col">`;
-    for (const { key, day, future } of col) {
-      const lvl = future ? -1 : intensityLevel(day, filter);
-      const cls = future ? "future" : lvl === -2 ? "sw-neutral" : lvl === 0 ? "sw-missed" : `sw-${lvl}`;
-      html += `<div class="ycell ${cls}" data-date="${key}" title="${esc(key)}"></div>`;
+    const firstDay = col[0];
+    const month = parseInt(firstDay.key.slice(5, 7), 10) - 1;
+    if (month !== currentMonth) {
+      currentMonth = month;
+      currentGroup = { month, cols: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.cols.push(col);
+  }
+
+  // Row labels (Mon / Wed / Fri) on the left of the first group
+  const dowLabels = ["Mon","","Wed","","Fri","",""];
+
+  let html = `<div class="year-grid">`;
+
+  // Row 1 — month labels aligned above each group
+  html += `<div class="year-months">`;
+  html += `<div class="year-dow-spacer"></div>`;
+  for (const g of groups) {
+    html += `<div class="year-month-label" style="--span: ${g.cols.length}">${MONTH_NAMES[g.month]}</div>`;
+  }
+  html += `</div>`;
+
+  // Row 2 — the actual grid with dow column on the left
+  html += `<div class="year-rows">`;
+  html += `<div class="year-dow">${dowLabels.map(l => `<span>${l}</span>`).join("")}</div>`;
+  for (let gi = 0; gi < groups.length; gi++) {
+    const g = groups[gi];
+    html += `<div class="year-group${gi > 0 ? " month-sep" : ""}">`;
+    for (const col of g.cols) {
+      html += `<div class="year-col">`;
+      for (const { key, day, future } of col) {
+        const lvl = future ? -1 : intensityLevel(day, filter);
+        const cls = future ? "future" : lvl === -2 ? "sw-neutral" : lvl === 0 ? "sw-missed" : `sw-${lvl}`;
+        html += `<div class="ycell ${cls}" data-date="${key}" title="${esc(key)}"></div>`;
+      }
+      html += `</div>`;
     }
     html += `</div>`;
   }
+  html += `</div>`;
+
   html += `</div>`;
   el.innerHTML = html;
 
@@ -228,8 +256,11 @@ function paintYear(root) {
     cell.addEventListener("mousemove", (e) => positionTip(tip, e));
     cell.addEventListener("mouseleave", () => hideTip(tip));
   });
+  // Scroll to the right so the most recent columns (where activity lives) are visible.
+  el.scrollLeft = el.scrollWidth;
 }
 
+// Exported for Progress page.
 // Intensity levels:
 //   -2 = neutral (no activity ever this day — pre-user era)
 //   -1 = future
@@ -238,7 +269,7 @@ function paintYear(root) {
 //    2 = medium green (33%+)
 //    3 = deep green (66%+)
 //    4 = full green (100% or green-day flag)
-function intensityLevel(day, filterKind = "all") {
+export function intensityLevel(day, filterKind = "all") {
   if (!day || !day.assigned || !day.assigned.length) return -2;
   let assigned = day.assigned;
   if (filterKind !== "all") {
@@ -335,6 +366,12 @@ function styles() {
       display: grid; grid-template-columns: 1fr 420px;
       gap: var(--s-5);
     }
+    .cal .cal-grid-wrap.single { grid-template-columns: 1fr; }
+    .cal .cal-footnote {
+      margin-top: var(--s-4); font-size: 12px; color: var(--mut); text-align: center;
+    }
+    .cal .cal-footnote a { color: var(--blue); font-weight: 600; text-decoration: none; }
+    .cal .cal-footnote a:hover { text-decoration: underline; }
     .cal .cal-card {
       background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
       padding: var(--s-5); box-shadow: var(--shadow);
@@ -366,14 +403,16 @@ function styles() {
     .cal .legend .sw { width: 12px; height: 12px; border-radius: 3px; }
     .cal .legend small { font-size: 11px; color: var(--mut); }
 
-    /* Heatmap palette — red = missed day, greens = solved intensity, neutral = pre-user */
-    .cal .sw-neutral { background: var(--line); }
-    .cal .sw-missed  { background: color-mix(in oklab, var(--red) 42%, var(--paper)); }
-    .cal .sw-0       { background: color-mix(in oklab, var(--red) 42%, var(--paper)); } /* alias for legacy */
-    .cal .sw-1       { background: color-mix(in oklab, var(--green) 32%, var(--paper)); }
-    .cal .sw-2       { background: color-mix(in oklab, var(--green) 60%, var(--paper)); }
-    .cal .sw-3       { background: var(--green); opacity: .9; }
-    .cal .sw-4       { background: var(--green); }
+    /* Heatmap palette — red = missed day, greens = solved intensity, neutral = pre-user.
+       Note: .ycell default background is defined further down; .ycell.sw-X wins by
+       specificity (0,2,0 > 0,1,0) so the ycell default never overrides a classed cell. */
+    .cal .sw-neutral, .cal .ycell.sw-neutral { background: var(--line); }
+    .cal .sw-missed,  .cal .ycell.sw-missed  { background: color-mix(in oklab, var(--red) 42%, var(--paper)); }
+    .cal .sw-0,       .cal .ycell.sw-0       { background: color-mix(in oklab, var(--red) 42%, var(--paper)); }
+    .cal .sw-1,       .cal .ycell.sw-1       { background: color-mix(in oklab, var(--green) 32%, var(--paper)); }
+    .cal .sw-2,       .cal .ycell.sw-2       { background: color-mix(in oklab, var(--green) 60%, var(--paper)); }
+    .cal .sw-3,       .cal .ycell.sw-3       { background: var(--green); opacity: .9; }
+    .cal .sw-4,       .cal .ycell.sw-4       { background: var(--green); }
 
     .cal .filter-tabs { display: flex; gap: 4px; background: var(--line); padding: 3px; border-radius: 10px; }
     .cal .ft {

@@ -44,9 +44,35 @@ async function main() {
     coinEl.addEventListener("click", () => openWalletAdjustModal());
   }
 
+  // Topbar streak → open streak-freeze popover
+  const streakEl = document.getElementById("streak");
+  if (streakEl) {
+    streakEl.style.cursor = "pointer";
+    streakEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleStreakPop();
+    });
+    document.addEventListener("click", (e) => {
+      const pop = document.getElementById("streak-pop");
+      if (pop && !pop.hidden && !pop.contains(e.target) && e.target !== streakEl) pop.hidden = true;
+    });
+  }
+
   wireGlobalSearch();
   wireAliveSheen();
+  wireSidebarToggle();
   startRolloverReminders();
+
+  // Info popovers (?) icon anywhere + Esc to close — global delegate
+  const { wireInfoPopovers } = await import("./info.js");
+  wireInfoPopovers();
+
+  // Daily recap scheduler — fires at 18:50 IST or when today's plan hits 100%.
+  const { startRecapScheduler } = await import("./recap.js");
+  startRecapScheduler();
+
+  // Phase 8 — Monday weekly-plan nudge
+  nudgeWeeklyPlanIfMonday();
   enhanceAll(document);  // sets up a mutation observer, so dynamically rendered selects also get the custom look
 
   // bot toggle — class-based so CSS display:flex doesn't fight the [hidden] attr
@@ -322,6 +348,191 @@ function startRolloverReminders() {
   setInterval(check, 10 * 60 * 1000);  // every 10 min
 }
 
+// --- Monday weekly-plan nudge (Phase 8) ---------------------------------
+// On the first Monday boot after 19:00 IST, if no weekly plan was generated
+// for this week, show a one-time toast nudging the user to generate one.
+// Doesn't fire Groq — just points to the Weekly plan page.
+async function nudgeWeeklyPlanIfMonday() {
+  const { getWeeklyPlan } = await import("./store.js");
+  const now = new Date();
+  const ist = new Date(now.getTime() + 5.5 * 3600 * 1000);
+  const istDay = ist.getUTCDay();  // 0 Sun .. 6 Sat
+  const istHour = ist.getUTCHours();
+  if (istDay !== 1 || istHour < 19) return;  // only Mondays after 7 PM IST
+
+  // Determine this week's Monday calendar key
+  const monday = new Date(ist); monday.setUTCHours(0, 0, 0, 0);
+  const mondayKey = `${monday.getUTCFullYear()}-${String(monday.getUTCMonth()+1).padStart(2,"0")}-${String(monday.getUTCDate()).padStart(2,"0")}`;
+  const nudgeKey = `gain:weeklyPlanNudged:${mondayKey}`;
+  try { if (localStorage.getItem(nudgeKey) === "1") return; } catch (_) {}
+
+  const plan = getWeeklyPlan?.();
+  // Treat the plan as "for this week" if it has days starting on or after today
+  const hasThisWeek = plan?.days?.some(d => d.date >= mondayKey);
+  if (hasThisWeek) {
+    try { localStorage.setItem(nudgeKey, "1"); } catch (_) {}
+    return;
+  }
+
+  // Show a soft toast with a click-through
+  const toast = document.createElement("div");
+  toast.className = "weekly-nudge-toast";
+  toast.innerHTML = `
+    <span class="wnt-ico">✦</span>
+    <span class="wnt-text">New week — generate your weekly plan?</span>
+    <button class="wnt-go">Open →</button>
+    <button class="wnt-dismiss" aria-label="Dismiss">✕</button>
+  `;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.classList.add("show"), 20);
+  const close = () => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 240);
+    try { localStorage.setItem(nudgeKey, "1"); } catch (_) {}
+  };
+  toast.querySelector(".wnt-go").addEventListener("click", () => {
+    location.hash = "#week";
+    close();
+  });
+  toast.querySelector(".wnt-dismiss").addEventListener("click", close);
+  setTimeout(close, 12_000);  // auto-dismiss after 12s
+}
+
+// --- Sidebar collapse ---------------------------------------------------
+// State persisted in localStorage. ⌘⇧B / Ctrl+Shift+B also toggles.
+function wireSidebarToggle() {
+  const sidebar = document.getElementById("sidebar");
+  const btn = document.getElementById("sidebar-toggle");
+  if (!sidebar || !btn) return;
+  const KEY = "gain:sidebar-collapsed";
+  const apply = (collapsed) => {
+    document.body.classList.toggle("sidebar-collapsed", collapsed);
+    btn.querySelector(".st-ic").textContent = collapsed ? "▶" : "◀";
+    btn.title = collapsed ? "Expand sidebar (⌘ ⇧ B)" : "Collapse sidebar (⌘ ⇧ B)";
+  };
+  try { apply(localStorage.getItem(KEY) === "1"); } catch (_) {}
+  btn.addEventListener("click", () => {
+    const nowCollapsed = !document.body.classList.contains("sidebar-collapsed");
+    try { localStorage.setItem(KEY, nowCollapsed ? "1" : "0"); } catch (_) {}
+    apply(nowCollapsed);
+  });
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      btn.click();
+    }
+  });
+}
+
+// --- Streak-freeze popover ----------------------------------------------
+// Click the 🔥 streak chip in the topbar → shows current streak, longest,
+// freeze tokens owned, and quick-action buttons:
+//   • "Protect yesterday's break" — only shown if yesterday has tasks but wasn't green/frozen
+//   • "Buy 1 freeze token (₹500)" — always visible; disabled if insufficient available
+function toggleStreakPop() {
+  const pop = document.getElementById("streak-pop");
+  if (!pop) return;
+  const willShow = !!pop.hidden;
+  pop.hidden = !willShow;
+  if (!willShow) return;
+  renderStreakPop(pop);
+}
+
+async function renderStreakPop(pop) {
+  const { getSettings } = await import("./store.js");
+  const { calendarKey, longestStreak } = await import("./engine.js");
+  const w = getWallet();
+  const s = getSettings();
+  const dayLog = getDayLog();
+  const streak = computeStreak(dayLog);
+  const longest = longestStreak(dayLog);
+  const tokens = Number(w.freezeTokens || 0);
+  const price = Number(s.wallet.streakFreezePrice || 500);
+  const available = Number(w.available || 0);
+  const canAfford = available >= price;
+
+  // Find the most recent non-green day in the last 7 that could use protection.
+  // Yesterday first; if yesterday was 0-task (rest day), look further back for the one break.
+  const today = new Date();
+  let protectCandidate = null;
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(today); d.setDate(today.getDate() - i);
+    const key = calendarKey(d);
+    const day = dayLog[key];
+    if (!day?.assigned?.length) continue;  // 0-task day — not a break
+    if (day.green || day.frozen) continue;  // already OK
+    protectCandidate = { key, label: new Date(key + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) };
+    break;
+  }
+
+  pop.innerHTML = `
+    <div class="sp-head">
+      <div>
+        <div class="sp-eyebrow">🔥 STREAK</div>
+        <div class="sp-stat"><b>${streak}</b> <small>day${streak === 1 ? "" : "s"} current</small></div>
+        <div class="sp-stat-sub">Longest: <b>${longest}</b> days</div>
+      </div>
+      <div class="sp-tokens">
+        <div class="sp-tok-ic">🧊</div>
+        <div class="sp-tok-count">${tokens}</div>
+        <div class="sp-tok-lb">freeze token${tokens === 1 ? "" : "s"}</div>
+      </div>
+    </div>
+    <div class="sp-actions">
+      ${protectCandidate ? `
+        <button class="sp-btn primary" id="sp-protect" ${tokens === 0 ? "disabled" : ""} title="${tokens === 0 ? "Buy a token first" : "Spend 1 token to mark " + protectCandidate.label + " as frozen (counts as green)"}">
+          ${tokens === 0 ? "No tokens" : `❄ Protect ${esc(protectCandidate.label)}`}
+        </button>
+      ` : `
+        <div class="sp-ok">✓ Streak unbroken — no day to protect</div>
+      `}
+      <button class="sp-btn ghost" id="sp-buy" ${!canAfford ? "disabled" : ""} title="${canAfford ? "Spend ₹" + price + " from your wallet" : "Need ₹" + (price - available) + " more"}">
+        + Buy 1 token · ₹${price.toLocaleString()}
+      </button>
+    </div>
+    <div class="sp-foot">
+      Available: ₹${available.toLocaleString()} · frozen days count as green toward streak + perfect-week bonus.
+    </div>
+  `;
+  pop.querySelector("#sp-buy")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await buyFreezeToken(price);
+    renderStreakPop(pop);  // refresh
+  });
+  pop.querySelector("#sp-protect")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!protectCandidate) return;
+    const ok = confirm(`❄ Protect ${protectCandidate.label} with 1 freeze token?\n\nThis marks it as a green day for the streak chain. The token is consumed. Not reversible.`);
+    if (!ok) return;
+    await applyFreezeToken(protectCandidate.key);
+    renderStreakPop(pop);
+    updateChrome();  // streak number updates
+  });
+}
+
+async function buyFreezeToken(price) {
+  const w = getWallet();
+  if ((w.available || 0) < price) return;
+  await updateWallet(w => {
+    w.spent = (w.spent || 0) + price;
+    w.freezeTokens = (w.freezeTokens || 0) + 1;
+    w.ledger.push({ date: new Date().toISOString(), type: "freeze-buy", amount: -price, label: "Bought 1 Streak Freeze token" });
+  });
+}
+
+async function applyFreezeToken(dateKey) {
+  const w = getWallet();
+  if ((w.freezeTokens || 0) < 1) return;
+  await updateWallet(w => {
+    w.freezeTokens = Math.max(0, (w.freezeTokens || 0) - 1);
+    w.ledger.push({ date: new Date().toISOString(), type: "freeze-apply", amount: 0, label: `Applied freeze to ${dateKey}` });
+  });
+  await updateDayLog(dl => {
+    if (!dl[dateKey]) return;
+    dl[dateKey].frozen = true;
+  });
+}
+
 function updateChrome() {
   const w = getWallet();
   const streak = computeStreak(getDayLog());
@@ -330,6 +541,29 @@ function updateChrome() {
   if (sN) animateNumber(sN, Number(sN.textContent || 0), streak);
   if (cN) animateNumber(cN, parseInt(cN.textContent.replace(/[^0-9]/g, "") || "0", 10), w.available, true);
   updateNavBadges();
+  updateTopbarCountdown();
+}
+
+// Topbar rollover countdown — same math as Today's chip but minimal styling.
+// Live-updates every 30s via setInterval kicked off on first call.
+let _tbcTimer = null;
+function updateTopbarCountdown() {
+  const el = document.getElementById("tb-countdown");
+  const timeEl = document.getElementById("tbc-time");
+  if (!el || !timeEl) return;
+  const now = new Date();
+  const istMs = now.getTime() + 5.5 * 3600 * 1000;
+  const ist = new Date(istMs);
+  const nowMin = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  const boundaryMin = 19 * 60;
+  const minsLeft = nowMin < boundaryMin ? boundaryMin - nowMin : (24 * 60) - nowMin + boundaryMin;
+  const hh = Math.floor(minsLeft / 60), mm = minsLeft % 60;
+  timeEl.textContent = hh > 0 ? `${hh}h ${mm}m` : `${mm}m`;
+  el.classList.remove("tbc-calm", "tbc-warn", "tbc-urgent");
+  if (minsLeft < 30) el.classList.add("tbc-urgent");
+  else if (minsLeft < 120) el.classList.add("tbc-warn");
+  else el.classList.add("tbc-calm");
+  if (!_tbcTimer) _tbcTimer = setInterval(updateTopbarCountdown, 30 * 1000);
 }
 
 // Sidebar nav badges — Today pending count · Library (total · solved) · Shop wishlist count.
@@ -339,18 +573,25 @@ function updateNavBadges() {
   const dateKey = todayKey();
   const day = getDayLog()[dateKey];
   const todayBadge = document.getElementById("nb-today");
+  const todayNavIc = document.querySelector('.nav a[data-route="today"] .nav-ic');
   if (todayBadge) {
     const open = day ? (day.assigned?.length || 0) - (day.done?.length || 0) : 0;
+    const fullyDone = day?.assigned?.length && open === 0;
     if (open > 0) {
       todayBadge.textContent = String(open);
       todayBadge.hidden = false;
       todayBadge.classList.toggle("nb-done", false);
-    } else if (day?.assigned?.length) {
+    } else if (fullyDone) {
       todayBadge.textContent = "✓";
       todayBadge.hidden = false;
       todayBadge.classList.add("nb-done");
     } else {
       todayBadge.hidden = true;
+    }
+    // Nav icon switch — 📅 → ✓ when day is sealed. Subtle "day complete" cue.
+    if (todayNavIc) {
+      todayNavIc.textContent = fullyDone ? "✓" : "📅";
+      todayNavIc.classList.toggle("nav-ic-done", !!fullyDone);
     }
   }
 

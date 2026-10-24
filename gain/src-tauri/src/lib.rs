@@ -111,6 +111,8 @@ struct GrokRequest {
     user: String,
     #[serde(default)]
     json_mode: bool,
+    #[serde(default)]
+    max_tokens: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -142,6 +144,11 @@ async fn call_grok(req: GrokRequest) -> Result<GrokResponse, String> {
     if req.json_mode {
         body["response_format"] = serde_json::json!({ "type": "json_object" });
     }
+    // Give structured-output calls plenty of room — Groq's default 1024 cap
+    // can truncate complex JSON schemas mid-generation (triggers json_validate_failed).
+    if let Some(m) = req.max_tokens {
+        body["max_tokens"] = serde_json::json!(m);
+    }
     let client = reqwest::Client::new();
     let res = client.post("https://api.groq.com/openai/v1/chat/completions")
         .bearer_auth(&req.api_key)
@@ -156,6 +163,61 @@ async fn call_grok(req: GrokRequest) -> Result<GrokResponse, String> {
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
     Ok(GrokResponse { ok: true, content, error: None })
+}
+
+// ------------------- SerpAPI proxy -------------------
+// SerpAPI blocks browser (CORS) by design. We proxy from Rust so the lesson
+// modal can resolve diagrams + YouTube videos without CORS pain.
+
+#[derive(Deserialize)]
+struct SerpRequest {
+    api_key: String,
+    engine: String,   // "google_images" or "youtube"
+    query: String,
+}
+
+#[derive(Serialize)]
+struct SerpResponse {
+    ok: bool,
+    json: Option<String>,   // raw JSON string from SerpAPI
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn serp_search(req: SerpRequest) -> Result<SerpResponse, String> {
+    if req.api_key.trim().is_empty() {
+        return Ok(SerpResponse { ok: false, json: None, error: Some("No SerpAPI key set.".into()) });
+    }
+    // Validate engine — allowlist so a malicious caller can't hit arbitrary endpoints.
+    let allowed_engines = ["google_images", "youtube"];
+    if !allowed_engines.contains(&req.engine.as_str()) {
+        return Ok(SerpResponse { ok: false, json: None, error: Some(format!("Unsupported engine: {}", req.engine)) });
+    }
+    // Build query parameters correctly per engine.
+    let client = reqwest::Client::new();
+    let mut qs = vec![
+        ("engine".to_string(), req.engine.clone()),
+        ("api_key".to_string(), req.api_key.clone()),
+        ("num".to_string(), "5".to_string()),
+    ];
+    // google_images uses `q`; youtube uses `search_query`
+    if req.engine == "youtube" {
+        qs.push(("search_query".to_string(), req.query.clone()));
+    } else {
+        qs.push(("q".to_string(), req.query.clone()));
+        qs.push(("safe".to_string(), "active".to_string()));
+    }
+
+    let res = client.get("https://serpapi.com/search.json")
+        .query(&qs)
+        .send().await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Ok(SerpResponse { ok: false, json: None, error: Some(format!("SerpAPI {}: {}", status, text)) });
+    }
+    Ok(SerpResponse { ok: true, json: Some(text), error: None })
 }
 
 // ------------------- secure keyring -------------------
@@ -229,6 +291,7 @@ pub fn run() {
             list_backups,
             copy_into_data,
             call_grok,
+            serp_search,
             secure_set,
             secure_get,
             secure_delete,

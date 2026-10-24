@@ -6,8 +6,10 @@
 //   - Single Mark solved button. REVIEW status (set in Library) is the lever to re-queue
 //     an item onto the weekend plan — no separate "AGAIN" button here.
 
-import { getSheets, getSettings, updateSheetRow, updateWallet, getWallet, getSolution, setSolution, on } from "./store.js";
-import { priceTask, todayKey } from "./engine.js";
+import { getSheets, getSettings, updateSheetRow, updateWallet, getWallet, getSolution, setSolution, callGrok, secure, on } from "./store.js";
+import { openLessonModal } from "./lesson.js";
+import { infoIcon } from "./info.js";
+import { priceTask, todayKey, capTaskValue } from "./engine.js";
 import { fireTaskBagged } from "./celebrate.js";
 
 let unsub = null;
@@ -115,11 +117,36 @@ function render(ctx) {
         <div class="prob-hero-side">
           <div class="value-pill">
             <div class="v-lb">BOUNTY</div>
-            <div class="v-val">+ ₹${value}</div>
+            <div class="v-val" id="v-bounty">+ ₹${value}</div>
           </div>
           <button class="btn-primary btn-lg" id="btn-solved">Mark solved · bank ₹${value}</button>
+          <div class="peek-wrap">
+            <button class="btn-ghost btn-peek" id="btn-peek" title="Groq gives you the pattern name only (no spoilers). Your bounty drops to the minimum.">
+              ✦ Peek the pattern
+            </button>
+            ${infoIcon({
+              title: "✦ Peek the pattern",
+              body: "Reveals only the pattern name (e.g. 'Sliding Window'). No code, no logic. Your bounty drops to the minimum (₹10 default) and the ledger flags this solve as 'peeked' so calibration stays honest.",
+              bullets: [
+                "Click Peek → confirm → pattern revealed",
+                "Bounty updates on the solve button",
+                "Peeked state persists per-row — can't un-peek"
+              ]
+            })}
+          </div>
+          <div class="peek-slot" id="peek-slot" hidden></div>
         </div>
       </div>
+
+      <section class="prob-learn alive" id="prob-learn">
+        <div class="pl-ico">✦</div>
+        <div class="pl-main">
+          <div class="pl-eyebrow">LEARN THIS TOPIC</div>
+          <div class="pl-title">Teacher-mode lesson · 500 words · interview-ready</div>
+          <div class="pl-sub">What's really tested, the mental model, real-world where you'll see this, pitfalls that burn people. Groq-powered, cached forever.</div>
+        </div>
+        <button class="pl-btn" id="pl-open" type="button">Open lesson →</button>
+      </section>
 
       <div class="prob-grid">
         <section class="prob-left">
@@ -173,6 +200,17 @@ function render(ctx) {
         </aside>
       </div>
 
+      <section class="prob-related" id="prob-related" data-sheet="${esc(sheetName)}" data-idx="${idx}" data-title="${esc(title)}" data-pattern="${esc(pattern || "")}" data-diff="${esc(difficulty || "")}">
+        <div class="pr-head">
+          <div>
+            <h3>Related problems</h3>
+            <span class="pc-sub">Same pattern, deeper mastery. Groq-cached forever.</span>
+          </div>
+          <button class="pr-refresh" id="pr-refresh" hidden title="Re-generate suggestions">↻ Refresh with AI</button>
+        </div>
+        <div class="pr-body" id="pr-body"></div>
+      </section>
+
       ${styles()}
     </div>
   `;
@@ -186,6 +224,15 @@ function resolveLink(lcValue, title) {
 }
 
 function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, solCol, confCol, statusCol }) {
+  // --- Learn this topic — Groq lesson modal, cached per row ---
+  root.querySelector("#pl-open")?.addEventListener("click", () => {
+    openLessonModal({ sheetName, rowIndex: idx });
+  });
+
+  // --- Related problems — lazy Groq, cached forever ---
+  wireRelated(root, { sheetName, idx });
+
+
   // --- LC URL input: write back to the sheet ---
   const urlInput = root.querySelector("#lc-url");
   const openBtn = root.querySelector("#lc-open");
@@ -292,6 +339,68 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
     // NOT disabled — clicking still writes Status/DateSolved so Progress stays accurate.
   }
 
+  // --- 9C: Peek the pattern (localStorage flag per sheet row) ---
+  const peekKey = `gain:peeked:${sourceKey}`;
+  const vBounty = root.querySelector("#v-bounty");
+  const peekBtn = root.querySelector("#btn-peek");
+  const peekSlot = root.querySelector("#peek-slot");
+  const minBounty = Number(getSettings().wallet.taskMin || 10);
+
+  function applyPeekedUI() {
+    peekBtn.classList.add("used");
+    peekBtn.disabled = true;
+    peekBtn.textContent = "✦ Peeked (bounty reduced)";
+    if (vBounty) vBounty.textContent = `+ ₹${minBounty}`;
+    if (!solvedBtn.classList.contains("locked")) {
+      solvedBtn.textContent = `Mark solved · bank ₹${minBounty}`;
+    }
+  }
+  function isPeeked() {
+    try { return localStorage.getItem(peekKey) === "1"; } catch { return false; }
+  }
+  function paintPeek(patternName) {
+    if (!peekSlot) return;
+    peekSlot.hidden = false;
+    peekSlot.innerHTML = `<div class="peek-pill">Pattern: <b>${esc(patternName)}</b></div>`;
+  }
+  if (isPeeked()) {
+    applyPeekedUI();
+    const confCol = findCol(row, /^(pattern|category)$/i);
+    if (confCol) paintPeek(row[confCol] || "unknown");
+  }
+
+  peekBtn?.addEventListener("click", async () => {
+    if (isPeeked()) return;
+    const ok = confirm(`✦ Peek the pattern?\n\nThis will reveal the pattern name only (no code, no logic).\nYour bounty drops from ₹${value} to ₹${minBounty}.\n\nContinue?`);
+    if (!ok) return;
+    peekBtn.disabled = true;
+    peekBtn.textContent = "Asking Groq…";
+    try {
+      // Prefer the sheet's own Pattern column if available (free, instant).
+      const patternCol = findCol(row, /^(pattern|category)$/i);
+      let pname = patternCol ? (row[patternCol] || "").trim() : "";
+      if (!pname) {
+        const apiKey = (await secure.get("groq_api_key").catch(() => null)) || "";
+        if (!apiKey) throw new Error("No Groq API key.");
+        const res = await callGrok({
+          apiKey,
+          temperature: 0.3,
+          maxTokens: 32,
+          system: "You name the single DSA/algorithmic pattern this problem uses. 2-4 words only. Examples: 'Sliding Window', 'Two Pointers', 'Topological Sort'. No preamble.",
+          user: `Problem: ${title}${difficulty ? ` (${difficulty})` : ""}${lcValue ? `, LC #${lcValue}` : ""}. Pattern name only:`,
+        });
+        pname = (res.content || "").trim();
+      }
+      if (!pname) throw new Error("Couldn't resolve pattern.");
+      try { localStorage.setItem(peekKey, "1"); } catch (_) {}
+      applyPeekedUI();
+      paintPeek(pname);
+    } catch (e) {
+      peekBtn.textContent = `✗ ${e.message || e}`;
+      setTimeout(() => { peekBtn.disabled = false; peekBtn.textContent = "✦ Peek the pattern"; }, 2000);
+    }
+  });
+
   solvedBtn.addEventListener("click", async () => {
     const title = row.Problem || row.Topic || "problem";
     const dateCol = findCol(row, /^(datesolved|datedone)$/i);
@@ -300,19 +409,28 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
     if (dateCol) patch[dateCol] = todayKey();
     if (Object.keys(patch).length) await updateSheetRow(sheetName, idx, patch);
 
+    // Peeked solves pay the minimum — honest-signal economy
+    const effectiveValue = isPeeked() ? minBounty : value;
+    // Phase 7 — daily earnings cap also applies on Problem-page bank path
+    const capped = capTaskValue(getWallet(), getSettings(), effectiveValue);
+    const bankValue = capped.amount;
+
     // Double-bank guard — re-check at click time in case Today was ticked in another tab/view.
     const alreadyBanked = wasRowAlreadyBanked();
     if (!alreadyBanked) {
       await updateWallet(w => {
-        w.earned += value;
+        w.earned += bankValue;
         w.ledger.push({
           date: new Date().toISOString(), type: "problem",
-          amount: value, label: title, sourceKey
+          amount: bankValue, label: title, sourceKey,
+          peeked: isPeeked() || undefined,
+          cappedFrom: capped.capped ? capped.originalAmount : undefined,
         });
       });
-      // Per-problem solve = small localized animation (not the full DAY SECURED overlay —
-      // that one is reserved for completing a whole multi-task Today plan).
-      fireTaskBagged({ amount: value, title, sourceEl: solvedBtn });
+      fireTaskBagged({ amount: bankValue, title, sourceEl: solvedBtn });
+      if (capped.capped) {
+        flash(root, `⚠ Daily cap reached — banked ₹${bankValue} (₹${capped.originalAmount - bankValue} skipped)`);
+      }
     } else {
       flash(root, "Already banked earlier — status updated only.");
     }
@@ -383,6 +501,150 @@ function stopTimer() {
 
 function slugify(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// --- Related problems: lazy Groq, cached per sheet#rowIndex forever ---------
+const RELATED_CACHE_PREFIX = "gain:related:";
+
+function wireRelated(root, { sheetName, idx }) {
+  const section = root.querySelector("#prob-related");
+  if (!section) return;
+  const body = section.querySelector("#pr-body");
+  const refreshBtn = section.querySelector("#pr-refresh");
+  const cacheKey = `${RELATED_CACHE_PREFIX}${sheetName}#${idx}`;
+
+  const paintCached = () => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) { paintEmpty(); return false; }
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list) || !list.length) { paintEmpty(); return false; }
+      paintList(list);
+      refreshBtn.hidden = false;
+      return true;
+    } catch (_) { paintEmpty(); return false; }
+  };
+
+  const paintEmpty = () => {
+    body.innerHTML = `
+      <div class="pr-empty">
+        <button class="pr-find" id="pr-find">✦ Find related problems</button>
+        <small>One Groq call. Cached forever on this device. ~5 seconds.</small>
+      </div>
+    `;
+    refreshBtn.hidden = true;
+    body.querySelector("#pr-find")?.addEventListener("click", () => fetchAndCache(false));
+  };
+
+  const paintList = (list) => {
+    const openPath = (hit) => {
+      const sn = hit.sheet || sheetName;
+      // Find the row by title to get its index
+      try {
+        const sheet = (window.gainSheets || getSheets())[sn];
+        if (!sheet) return "#today";
+        const needle = String(hit.title || "").trim().toLowerCase();
+        const titleCol = sheet.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+        if (titleCol) {
+          const i = sheet.rows.findIndex(r => String(r[titleCol] || "").trim().toLowerCase() === needle);
+          if (i >= 0) return `#problem/${encodeURIComponent(sn)}/${i}`;
+        }
+      } catch (_) {}
+      return "#library";
+    };
+    body.innerHTML = list.map(hit => `
+      <article class="pr-item">
+        <div class="pr-item-main">
+          <div class="pr-item-head">
+            <a class="pr-item-title" href="${openPath(hit)}">${esc(hit.title || "")}</a>
+            <span class="pr-item-pattern">${esc(hit.pattern || hit.sheet || "")}</span>
+          </div>
+          <p class="pr-item-reason">${esc(hit.reason || "")}</p>
+        </div>
+        <a class="pr-open" href="${openPath(hit)}">Open →</a>
+      </article>
+    `).join("");
+  };
+
+  const fetchAndCache = async (silent) => {
+    if (!silent) body.innerHTML = `<div class="pr-loading"><div class="skel-line"></div><div class="skel-line"></div><div class="skel-line short"></div></div>`;
+    try {
+      const list = await askGroqForRelated({ sheetName, idx });
+      if (!list || !list.length) { paintEmpty(); return; }
+      try { localStorage.setItem(cacheKey, JSON.stringify(list)); } catch (_) {}
+      paintList(list);
+      refreshBtn.hidden = false;
+    } catch (e) {
+      body.innerHTML = `<div class="pr-err">Groq call failed: ${esc(e.message || e)}. ${localStorage.getItem(cacheKey) ? "Showing cached suggestions." : "<button class='pr-find' id='pr-find-retry'>Retry</button>"}</div>`;
+      body.querySelector("#pr-find-retry")?.addEventListener("click", () => fetchAndCache(false));
+      // Fall back to any cached version if present
+      paintCached();
+    }
+  };
+
+  refreshBtn?.addEventListener("click", () => fetchAndCache(false));
+  paintCached();
+}
+
+async function askGroqForRelated({ sheetName, idx }) {
+  const { callGrok, secure, getSheets } = await import("./store.js");
+  const apiKey = (await secure.get("groq_api_key").catch(() => null)) ||
+                 (await secure.get("grok_api_key").catch(() => null));
+  if (!apiKey) throw new Error("No Groq API key. Add one in Settings → AI butler.");
+
+  const sheet = getSheets()[sheetName];
+  if (!sheet) throw new Error("Sheet not loaded.");
+  const row = sheet.rows[idx];
+  const titleCol = sheet.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+  const patternCol = sheet.headers.find(h => /^(pattern|category)$/i.test(h));
+  const diffCol = sheet.headers.find(h => /^difficulty$/i.test(h));
+
+  const title = row[titleCol] || "";
+  const pattern = row[patternCol] || "";
+  const difficulty = row[diffCol] || "";
+
+  // Pool: same-sheet rows (excluding current), optionally same-pattern first.
+  const pool = sheet.rows
+    .map((r, i) => ({ r, i }))
+    .filter(({ i }) => i !== idx)
+    .map(({ r }) => ({
+      title: r[titleCol] || "",
+      pattern: r[patternCol] || "",
+      difficulty: r[diffCol] || "",
+    }))
+    .filter(x => x.title);
+
+  const poolSummary = pool.slice(0, 60).map(p => `• ${p.title} [${p.pattern || "no-pattern"}${p.difficulty ? ", " + p.difficulty : ""}]`).join("\n");
+
+  const res = await callGrok({
+    apiKey,
+    jsonMode: true,
+    system: `You are a GAIN interview-prep librarian. Pick 3-5 related problems from the user's own ${sheetName} sheet that would deepen mastery of the pattern/skill at play.
+Reply STRICT JSON: {"related": [{"title": "...", "pattern": "...", "reason": "..."}]}.
+Reason is ONE short interview-tone sentence naming the shared template or divergence. No markdown. No preamble.
+Choose problems FROM THE POOL ONLY. If the user hasn't added many, return fewer rather than inventing titles.`,
+    user: `Current problem: ${title} [${pattern || "no-pattern"}${difficulty ? ", " + difficulty : ""}]
+Sheet: ${sheetName}
+
+Pool (same sheet, up to 60 items):
+${poolSummary}
+
+Return 3-5 related picks from the pool.`
+  });
+
+  if (!res.ok) throw new Error(res.error || "Groq call failed");
+  let parsed;
+  try {
+    const raw = res.content.trim().replace(/^```json\s*|\s*```$/g, "");
+    parsed = JSON.parse(raw);
+  } catch (_) { throw new Error("Couldn't parse response."); }
+  const list = Array.isArray(parsed.related) ? parsed.related : [];
+  return list.slice(0, 5).map(x => ({
+    title: String(x.title || "").trim(),
+    pattern: String(x.pattern || "").trim() || pattern,
+    reason: String(x.reason || "").trim(),
+    sheet: sheetName,
+  })).filter(x => x.title);
 }
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]); }
@@ -574,6 +836,161 @@ function styles() {
     }
     /* Focus timer ring — subtle gold instead of neon blue */
     :root[data-theme="dark"] .prob #ring-arc { stroke: var(--gold); }
+
+    /* ---- Peek the pattern (hero-side) ---- */
+    .prob .peek-wrap { display: inline-flex; align-items: center; margin-top: 8px; }
+    .prob .btn-peek {
+      padding: 8px 14px;
+      background: transparent;
+      border: 1px dashed color-mix(in oklab, var(--gold) 36%, var(--line));
+      color: var(--mut);
+      border-radius: 10px; cursor: pointer;
+      font: 600 12px/1 var(--font-sans);
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prob .btn-peek:hover { color: var(--gold); border-color: var(--gold); background: color-mix(in oklab, var(--gold) 6%, transparent); }
+    .prob .btn-peek.used {
+      border-style: solid; color: var(--gold);
+      background: var(--gold-soft);
+      cursor: not-allowed;
+    }
+    .prob .peek-slot { margin-top: 10px; }
+    .prob .peek-pill {
+      padding: 10px 14px;
+      background: color-mix(in oklab, var(--gold) 8%, var(--paper));
+      border-left: 3px solid var(--gold); border-radius: 10px;
+      font-size: 13px; color: var(--ink);
+      animation: slideDownFade 220ms cubic-bezier(.2,1.2,.3,1) both;
+    }
+    .prob .peek-pill b { color: var(--gold); font-weight: 700; }
+
+    /* ---- Learn this topic card (above the solve grid) ---- */
+    .prob .prob-learn {
+      display: flex; align-items: center; gap: 16px;
+      margin-bottom: var(--s-4);
+      padding: 16px 20px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 1px 0 rgba(255,255,255,.6) inset;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prob .prob-learn:hover {
+      border-color: color-mix(in oklab, var(--gold) 32%, var(--line));
+      transform: translateY(-1px);
+      box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 8px 24px color-mix(in oklab, var(--gold) 10%, transparent);
+    }
+    .prob .pl-ico {
+      flex-shrink: 0;
+      width: 44px; height: 44px; border-radius: 12px;
+      background: color-mix(in oklab, var(--gold) 10%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--gold) 22%, var(--line));
+      color: var(--gold); font-size: 22px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .prob .pl-main { min-width: 0; flex: 1; }
+    .prob .pl-eyebrow {
+      font: 600 10px/1 var(--font-sans);
+      letter-spacing: .16em; text-transform: uppercase; color: var(--mut);
+      margin-bottom: 4px;
+    }
+    .prob .pl-title {
+      font-size: 15px; font-weight: 600; color: var(--ink);
+      letter-spacing: -.012em;
+    }
+    .prob .pl-sub {
+      font-size: 12.5px; color: var(--mut); line-height: 1.5; margin-top: 3px;
+    }
+    .prob .pl-btn {
+      flex-shrink: 0;
+      padding: 10px 18px;
+      background: var(--ink); color: var(--paper);
+      border: none; border-radius: 10px;
+      cursor: pointer; font: 600 13px/1 var(--font-sans);
+      box-shadow: 0 1px 2px rgba(0,0,0,.1), 0 1px 0 rgba(255,255,255,.1) inset;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prob .pl-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,.14), 0 1px 0 rgba(255,255,255,.14) inset;
+    }
+
+    /* ---- Related problems section ---- */
+    .prob .prob-related {
+      margin-top: var(--s-5);
+      padding: 20px 22px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+    .prob .pr-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .prob .pr-head h3 { margin: 0; font-size: 15px; font-weight: 700; }
+    .prob .pr-refresh {
+      padding: 6px 12px; background: transparent; color: var(--mut);
+      border: 1px solid var(--line); border-radius: 999px;
+      font: 600 11.5px/1 var(--font-sans); cursor: pointer;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prob .pr-refresh:hover { color: var(--gold); border-color: var(--gold); }
+    .prob .pr-empty {
+      padding: 24px;
+      text-align: center;
+      background: var(--bg); border-radius: 10px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+    }
+    .prob .pr-find {
+      padding: 10px 22px;
+      background: var(--ink); color: var(--paper);
+      border: none; border-radius: 10px; cursor: pointer;
+      font: 700 13px/1 var(--font-sans);
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prob .pr-find:hover { transform: translateY(-1px); filter: brightness(1.08); }
+    .prob .pr-empty small { color: var(--mut); font-size: 11.5px; }
+
+    .prob .pr-item {
+      display: flex; justify-content: space-between; align-items: center; gap: 14px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      transition: background var(--dur-fast) var(--ease);
+    }
+    .prob .pr-item:last-child { border-bottom: none; }
+    .prob .pr-item:hover { background: var(--bg); }
+    .prob .pr-item-main { min-width: 0; flex: 1; }
+    .prob .pr-item-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+    .prob .pr-item-title { font-size: 14px; font-weight: 700; color: var(--ink); text-decoration: none; }
+    .prob .pr-item-title:hover { color: var(--blue); }
+    .prob .pr-item-pattern {
+      padding: 2px 8px;
+      background: var(--blue-soft); color: var(--blue);
+      border-radius: 999px; font: 600 10.5px/1.3 var(--font-sans);
+      letter-spacing: .02em;
+    }
+    .prob .pr-item-reason { margin: 0; font-size: 12.5px; color: var(--mut); line-height: 1.5; }
+    .prob .pr-open {
+      padding: 8px 14px; background: var(--bg); border: 1px solid var(--line);
+      color: var(--ink); border-radius: 8px; text-decoration: none;
+      font: 600 12px/1 var(--font-sans);
+      white-space: nowrap;
+      transition: all var(--dur-fast) var(--ease);
+    }
+    .prob .pr-open:hover { border-color: var(--blue); color: var(--blue); }
+
+    .prob .pr-loading { padding: 10px 0; }
+    .prob .pr-loading .skel-line {
+      height: 10px; border-radius: 6px; margin-bottom: 10px;
+      background: linear-gradient(90deg, var(--line) 0%, color-mix(in oklab, var(--line) 50%, var(--paper)) 50%, var(--line) 100%);
+      background-size: 200% 100%;
+      animation: prShimmer 1200ms ease-in-out infinite;
+    }
+    .prob .pr-loading .skel-line.short { width: 60%; }
+    @keyframes prShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+    .prob .pr-err {
+      padding: 16px; background: color-mix(in oklab, var(--red) 10%, transparent);
+      color: var(--red); border-radius: 10px; font-size: 13px;
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    }
   </style>
   `;
 }

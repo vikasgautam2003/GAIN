@@ -62,8 +62,9 @@ export default {
     const existingKey = (await secure.get("groq_api_key").catch(() => null))
                      || (await secure.get("grok_api_key").catch(() => null))
                      || "";
+    const existingSerp = (await secure.get("serpapi_key").catch(() => null)) || "";
 
-    root.innerHTML = render(s, existingKey);
+    root.innerHTML = render(s, existingKey, existingSerp);
     paintMotivationCount(root);
     paintShopQuoteCount(root);
     attachHandlers(root);
@@ -77,7 +78,7 @@ export default {
   unmount() { if (unsub) { unsub(); unsub = null; } }
 };
 
-function render(s, existingKey) {
+function render(s, existingKey, existingSerp = "") {
   const dyn = (s.grok.dynamicConditions || []).join("\n");
   return `
     <div class="view-inner settings">
@@ -86,6 +87,10 @@ function render(s, existingKey) {
         <div class="s-eyebrow">CONFIGURE</div>
         <h1 class="s-title">Settings.</h1>
         <p class="s-lede">The plan, the pricing, the butler. Every lever that shapes your climb — one page, one click of truth.</p>
+        <button class="s-glossary-btn" id="s-glossary-open" title="Open the glossary of every GAIN feature">
+          <span class="sg-ic">ⓘ</span>
+          <span>What does everything mean?</span>
+        </button>
       </header>
 
       <!-- Thin horizontal section nav — luxury, sticky -->
@@ -95,6 +100,7 @@ function render(s, existingKey) {
           <button data-scroll="sec-profile"    class="stb-chip"><span>Profile</span></button>
           <button data-scroll="sec-schedule"   class="stb-chip"><span>Schedule</span></button>
           <button data-scroll="sec-grok"       class="stb-chip"><span>AI butler</span></button>
+          <button data-scroll="sec-media"      class="stb-chip"><span>Media (SerpAPI)</span></button>
           <button data-scroll="sec-motivation" class="stb-chip"><span>Motivation</span></button>
           <button data-scroll="sec-shopq"      class="stb-chip"><span>Shop quotes</span></button>
           <button data-scroll="sec-wallet"     class="stb-chip"><span>Wallet</span></button>
@@ -191,6 +197,29 @@ function render(s, existingKey) {
         </label>
       </section>
 
+      <section class="s-card" id="sec-media">
+        <div class="s-head">
+          <h3><span class="h-ic">🎬</span>Media <span class="chip-provider">SERPAPI</span></h3>
+          <span class="s-tag">Optional · unlocks images &amp; YouTube in lessons</span>
+        </div>
+        <p class="s-note">
+          The <b>Learn this topic</b> modal can embed 2 diagrams and 1 YouTube video per lesson,
+          picked by Groq. SerpAPI is used to resolve those queries. If you skip this, lessons still
+          work — you'll just see "Search YouTube for…" fallback links instead of embedded media.
+          Keys are stored in macOS Keychain.
+        </p>
+        <div class="grid-3">
+          <label class="full">SerpAPI key
+            <input id="s-serp-key" type="password" placeholder="paste your SerpAPI key" value="${esc(existingSerp)}" autocomplete="off" />
+            <p class="s-sub">Get one at <code>serpapi.com</code>. Free tier: 100 searches/month. Each lesson uses ~3 searches, cached forever per topic.</p>
+          </label>
+        </div>
+        <div class="row-right" style="margin-top:10px;">
+          <button class="btn-ghost btn-sm" id="btn-test-serp">Test connection</button>
+          <span id="test-serp-note" class="s-tag" style="margin-left:10px;"></span>
+        </div>
+      </section>
+
       <section class="s-card" id="sec-motivation">
         <div class="s-head">
           <h3><span class="h-ic">🔥</span>Motivation</h3>
@@ -275,6 +304,25 @@ function render(s, existingKey) {
             <option value="tasks" ${s.wallet.withdrawCapMode==='tasks'?'selected':''}>Tasks / day</option>
             <option value="amount" ${s.wallet.withdrawCapMode==='amount'?'selected':''}>₹ / day</option>
           </select></label>
+        </div>
+
+        <h4 class="sub-h">Streak freeze token</h4>
+        <p class="s-note">A one-time purchase that marks a non-green day as "frozen" — counts as green toward streak + perfect-week bonus. Buy from the 🔥 topbar chip.</p>
+        <div class="grid-3">
+          <label>Freeze token price ₹<input id="s-sfp" type="number" min="0" value="${s.wallet.streakFreezePrice ?? 500}" /></label>
+        </div>
+
+        <h4 class="sub-h">Perfect-week bonus</h4>
+        <p class="s-note">N consecutive green days in a row = one-time ₹ bonus. Fires again at every N-th day of the unbroken chain.</p>
+        <div class="grid-3">
+          <label>Bonus ₹<input id="s-pwb" type="number" min="0" value="${s.wallet.perfectWeekBonus ?? 500}" /></label>
+          <label>Consecutive green days needed<input id="s-pwd" type="number" min="2" max="30" value="${s.wallet.perfectWeekDays ?? 5}" /></label>
+        </div>
+
+        <h4 class="sub-h">Daily earnings cap</h4>
+        <p class="s-note">Max ₹ you can bank from solving problems per day. Caps the solve rate — prevents weekend cramming. Set to 0 to disable the cap.</p>
+        <div class="grid-3">
+          <label>Daily cap ₹ (0 = off)<input id="s-dec" type="number" min="0" value="${s.wallet.dailyEarningCap ?? 0}" /></label>
         </div>
 
         <h4 class="sub-h">Shop tier unlock thresholds</h4>
@@ -400,6 +448,12 @@ function render(s, existingKey) {
                 <span class="bz-btn-ic">↑</span> Restore from file
               </label>
               <input type="file" id="file-import-backup" accept="application/json,.json" hidden />
+              <button class="bz-btn bz-btn-ghost" id="btn-export-grimoire" title="Download a single .md file of every solution, note, lesson, and key idea you've captured">
+                <span class="bz-btn-ic">📖</span> Export grimoire (.md)
+              </button>
+              <button class="bz-btn bz-btn-ghost" id="btn-export-weekly" title="Groq reflects on your last 7 days — stats + 300-word honest mentor's take, saved as .md">
+                <span class="bz-btn-ic">🗓</span> Weekly review (.md)
+              </button>
             </div>
           </div>
 
@@ -493,6 +547,19 @@ function render(s, existingKey) {
         font-size: 15px; color: var(--mut); margin: 0 auto;
         max-width: 540px; line-height: 1.5;
       }
+      .settings .s-glossary-btn {
+        display: inline-flex; align-items: center; gap: 8px;
+        margin-top: 18px;
+        padding: 10px 20px;
+        background: var(--paper); border: 1px solid color-mix(in oklab, var(--gold) 32%, var(--line));
+        color: var(--mut); border-radius: 999px;
+        cursor: pointer; font: 600 13px/1 var(--font-sans);
+        transition: all .18s;
+      }
+      .settings .s-glossary-btn:hover {
+        color: var(--gold); border-color: var(--gold); transform: translateY(-1px);
+      }
+      .settings .s-glossary-btn .sg-ic { color: var(--gold); font-size: 15px; }
 
       /* ===== Thin sticky section nav — shrink-to-fit pill ===== */
       .settings .s-topbar {
@@ -1006,6 +1073,15 @@ async function persistAllFields(root) {
     const capVal = root.querySelector("#s-cap").value;
     st.wallet.withdrawCapValue = capVal === "" ? null : Math.max(0, Number(capVal) || 0);
     st.wallet.withdrawCapMode = root.querySelector("#s-capmode").value;
+    // Phase 7 — streak freeze + perfect-week + daily cap
+    const sfp = root.querySelector("#s-sfp")?.value;
+    if (sfp != null && sfp !== "") st.wallet.streakFreezePrice = Math.max(0, Number(sfp) || 0);
+    const pwb = root.querySelector("#s-pwb")?.value;
+    if (pwb != null && pwb !== "") st.wallet.perfectWeekBonus = Math.max(0, Number(pwb) || 0);
+    const pwd = root.querySelector("#s-pwd")?.value;
+    if (pwd != null && pwd !== "") st.wallet.perfectWeekDays = Math.max(2, Math.min(30, Number(pwd) || 5));
+    const dec = root.querySelector("#s-dec")?.value;
+    if (dec != null && dec !== "") st.wallet.dailyEarningCap = Math.max(0, Number(dec) || 0);
     // Shop tier unlocks
     st.wallet.tierUnlocks = st.wallet.tierUnlocks || {};
     const tuSmall  = root.querySelector("#s-tu-small")?.value;
@@ -1148,6 +1224,8 @@ function attachHandlers(root) {
       await persistAllFields(root);
       const key = root.querySelector("#s-key").value.trim();
       if (key) await secure.set("groq_api_key", key);
+      const serpKey = root.querySelector("#s-serp-key")?.value.trim();
+      if (serpKey) await secure.set("serpapi_key", serpKey);
       if (autoSaveNote) {
         autoSaveNote.textContent = `Auto-saved · ${new Date().toLocaleTimeString()}`;
         autoSaveNote.style.color = "var(--green)";
@@ -1174,10 +1252,39 @@ function attachHandlers(root) {
     await persistAllFields(root);
     const key = root.querySelector("#s-key").value.trim();
     if (key) await secure.set("groq_api_key", key);
+    const serpKey = root.querySelector("#s-serp-key")?.value.trim();
+    if (serpKey) await secure.set("serpapi_key", serpKey);
     const note = root.querySelector("#save-note");
     note.textContent = `Saved · ${new Date().toLocaleTimeString()}`;
     note.style.color = "var(--green)";
     setTimeout(() => { note.textContent = ""; }, 2800);
+  });
+
+  // SerpAPI test connection — goes through Rust proxy (no CORS from browser).
+  root.querySelector("#btn-test-serp")?.addEventListener("click", async () => {
+    const noteEl = root.querySelector("#test-serp-note");
+    const key = root.querySelector("#s-serp-key").value.trim();
+    if (!key) { noteEl.textContent = "Enter a key first."; noteEl.style.color = "var(--red)"; return; }
+    noteEl.textContent = "Testing…"; noteEl.style.color = "var(--mut)";
+    try {
+      await secure.set("serpapi_key", key);
+      const { serpSearch } = await import("./store.js");
+      const res = await serpSearch({ engine: "google_images", query: "hashmap diagram", apiKey: key });
+      if (!res?.ok) throw new Error(res?.error || "SerpAPI call failed");
+      const json = JSON.parse(res.json);
+      if (json.error) throw new Error(json.error);
+      const remaining = json.search_metadata?.credits_left
+                    ?? json.search_information?.credits_left
+                    ?? json.account?.plan_searches_left;
+      const hits = Array.isArray(json.images_results) ? json.images_results.length : 0;
+      noteEl.textContent = remaining != null
+        ? `✓ Connected · ${remaining} searches left · ${hits} hits`
+        : `✓ Connected · ${hits} hits`;
+      noteEl.style.color = "var(--green)";
+    } catch (e) {
+      noteEl.textContent = `✗ ${e.message || e}`;
+      noteEl.style.color = "var(--red)";
+    }
   });
 
   // paste-add motivations
@@ -1303,6 +1410,46 @@ function attachHandlers(root) {
 
   // ---- Adjust wallet modal ----
   root.querySelector("#btn-wallet-adjust")?.addEventListener("click", openWalletAdjustModal);
+
+  // ---- Glossary modal ----
+  root.querySelector("#s-glossary-open")?.addEventListener("click", async () => {
+    const { openGlossaryModal } = await import("./info.js");
+    openGlossaryModal();
+  });
+
+  // ---- Weekly review export (Groq reflects on last 7 days) ----
+  root.querySelector("#btn-export-weekly")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const original = btn.innerHTML;
+    try {
+      btn.disabled = true;
+      btn.innerHTML = `<span class="bz-btn-ic">⏱</span> Asking Groq…`;
+      const { exportWeeklyReview } = await import("./weeklyReview.js");
+      const stats = await exportWeeklyReview();
+      btn.innerHTML = `✓ ${stats.total} solves · ${stats.greenCount}/7 green · ${stats.hasReflection ? "Groq reflection ✓" : "no key"}`;
+      setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 3800);
+    } catch (err) {
+      btn.innerHTML = `✗ ${err.message || err}`;
+      setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 3800);
+    }
+  });
+
+  // ---- Grimoire export (one .md file of every scrap) ----
+  root.querySelector("#btn-export-grimoire")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const original = btn.innerHTML;
+    try {
+      btn.disabled = true;
+      btn.textContent = "Compiling…";
+      const { exportGrimoire } = await import("./grimoire.js");
+      const stats = await exportGrimoire();
+      btn.innerHTML = `✓ ${stats.totalRows} problems · ${stats.totalWithLessons} lessons`;
+      setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 3200);
+    } catch (err) {
+      btn.innerHTML = `✗ ${err.message || err}`;
+      setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 3200);
+    }
+  });
 
   root.querySelector("#btn-export-backup")?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;
