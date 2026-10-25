@@ -20,12 +20,17 @@ const CODE_DEFAULT_LANG = "java";
 // Which sections render for which sheet kind. Order matters.
 // DSA/SQL get the full programming track (code + complexity + dry run).
 // SD/Int/Ext get the conceptual track (tradeoffs instead of complexity).
+// Two tracks:
+//  - CODE track (dsa, sql): dry run + full solution code + complexity analysis
+//  - CONCEPT track (sd, int, ext): model answer + real-world case studies with
+//    photos + trade-offs + interview Q&A. No code block. Non-code topics need
+//    explanations, war stories, and visuals, not a return statement.
 const SECTION_PLAN = {
   dsa: ["problem", "intuition", "dryRun", "code", "edgeCases", "complexity", "interviewPointers", "revisionNotes"],
   sql: ["problem", "intuition", "dryRun", "code", "edgeCases", "complexity", "interviewPointers", "revisionNotes"],
-  sd:  ["problem", "intuition", "tradeoffs", "edgeCases", "interviewPointers", "revisionNotes"],
-  int: ["problem", "intuition", "tradeoffs", "edgeCases", "interviewPointers", "revisionNotes"],
-  ext: ["problem", "intuition", "tradeoffs", "interviewPointers", "revisionNotes"],
+  sd:  ["problem", "coreAnswer", "realWorldCases", "tradeoffs", "edgeCases", "interviewPointers", "revisionNotes"],
+  int: ["problem", "coreAnswer", "realWorldCases", "tradeoffs", "edgeCases", "interviewPointers", "revisionNotes"],
+  ext: ["problem", "coreAnswer", "realWorldCases", "tradeoffs", "interviewPointers", "revisionNotes"],
 };
 
 const KIND_LABEL = {
@@ -333,6 +338,8 @@ const SECTION_LABELS = {
   edgeCases: "Edge cases",
   complexity: "Complexity",
   tradeoffs: "Trade-offs",
+  coreAnswer: "The model answer",
+  realWorldCases: "Where this shows up in the wild",
   interviewPointers: "Interview pointers",
   revisionNotes: "Revision notes",
 };
@@ -575,6 +582,57 @@ function renderSectionHTML(sec, lesson, { stepIdx }) {
         </div>
       </section>`,
       image: null,
+    };
+  }
+  if (sec === "coreAnswer" && lesson.coreAnswer) {
+    const a = lesson.coreAnswer;
+    return {
+      html: `<section class="lsn-sec lsn-core-answer" data-sec="coreAnswer">
+        <h3>${step}<span>The model answer</span></h3>
+        <p class="lsn-ca-sub">What a senior candidate would say when asked this at a top-tier interview.</p>
+        ${a.tldr ? `<div class="lsn-ca-tldr"><span class="lsn-ca-tldr-tag">TL;DR</span><p>${renderMarkdown(a.tldr)}</p></div>` : ""}
+        ${a.points?.length ? `
+          <div class="lsn-ca-points">
+            <div class="lsn-ca-points-label">Hit these points, in order</div>
+            <ol>
+              ${a.points.map(pt => `<li>${renderMarkdown(pt)}</li>`).join("")}
+            </ol>
+          </div>` : ""}
+        ${a.explanation ? `
+          <div class="lsn-ca-explain">
+            <div class="lsn-ca-explain-label">How to say it out loud</div>
+            <p>${renderMarkdown(a.explanation)}</p>
+          </div>` : ""}
+      </section>`,
+      image: null,
+    };
+  }
+  if (sec === "realWorldCases" && lesson.realWorldCases?.length) {
+    return {
+      html: `<section class="lsn-sec lsn-rwc" data-sec="realWorldCases">
+        <h3>${step}<span>Where this shows up in the wild</span></h3>
+        <p class="lsn-rwc-sub">Real companies, real production decisions — anchor your answer to one of these.</p>
+        <div class="lsn-rwc-list">
+          ${lesson.realWorldCases.map(c => `
+            <article class="lsn-rwc-card">
+              <header class="lsn-rwc-head">
+                <span class="lsn-rwc-badge">CASE</span>
+                <div class="lsn-rwc-company">${esc(c.company || "—")}</div>
+                ${c.useCase ? `<div class="lsn-rwc-usecase">${esc(c.useCase)}</div>` : ""}
+              </header>
+              ${c.narrative ? `<p class="lsn-rwc-narr">${renderMarkdown(c.narrative)}</p>` : ""}
+              ${c.imageQueries?.length ? `
+                <div class="lsn-rwc-gallery">
+                  ${c.imageQueries.map(q => imageFigureHTML(q)).join("")}
+                </div>` : ""}
+            </article>
+          `).join("")}
+        </div>
+      </section>`,
+      image: null,
+      extraImages: lesson.realWorldCases.flatMap(c =>
+        (c.imageQueries || []).map(q => ({ query: q, section: "realWorldCases" }))
+      ),
     };
   }
   if (sec === "tradeoffs" && lesson.tradeoffs?.length) {
@@ -1100,6 +1158,18 @@ function normalizeLesson(p, plan) {
       spaceWhy: normStr(p.complexity.spaceWhy),
     } : null,
     tradeoffs: arr(p.tradeoffs).map(t => ({ pro: normStr(t.pro), con: normStr(t.con) })).filter(t => t.pro || t.con),
+    // CONCEPT-track sections (sd/int/ext) — safe empty defaults when absent.
+    coreAnswer: p.coreAnswer ? {
+      tldr: normStr(p.coreAnswer.tldr),
+      points: normStrList(p.coreAnswer.points).slice(0, 6),
+      explanation: normStr(p.coreAnswer.explanation),
+    } : null,
+    realWorldCases: arr(p.realWorldCases).map(c => ({
+      company: normStr(c.company),
+      useCase: normStr(c.useCase),
+      narrative: normStr(c.narrative),
+      imageQueries: normStrList(c.imageQueries).slice(0, 3),
+    })).filter(c => c.company || c.narrative).slice(0, 3),
     // Interview pointers: accept BOTH new {question, answer} objects AND legacy string array.
     interviewPointers: arr(p.interviewPointers).map(x => {
       if (typeof x === "string") return { question: str(x), answer: "" };
@@ -1126,19 +1196,33 @@ function buildSystemPrompt(kind, plan, { rebuildMode = false } = {}) {
   const isProgrammatic = kind === "dsa" || kind === "sql";
   const codeLang = kind === "sql" ? "sql" : CODE_DEFAULT_LANG;
 
+  const isConceptTrack = plan.includes("coreAnswer");
+
   const schemaParts = [];
   schemaParts.push(`"oneLineGist": "one sentence capturing the key idea"`);
-  schemaParts.push(`"problem": {"concept": "2-3 sentences explaining the UNDERLYING CONCEPT in plain human language, as if to someone who has never seen a LeetCode problem — e.g. for Two Sum: 'you have a list of numbers and want to find two that add up to a target; the question is how to do that without checking every pair'", "setup": "then the LeetCode-style framing in 1-2 sentences: what is given, what to return", "examples": [{"input": "exact input in code-like notation, e.g. nums=[2,7,11,15], target=9", "output": "exact return value in code-like notation, e.g. [0,1]", "explanation": "ONE sentence connecting the input to the output in plain words — the WHY, not just the WHAT"}], "imageQuery": "google image query for a problem diagram, or empty"}`);
-  schemaParts.push(`"intuition": {"setup": "lead-in sentence", "trick": "the key insight in one sentence", "whyItWorks": "2-3 sentences explaining the invariant", "imageQuery": "google image query for an intuition visualization, or empty"}`);
+  if (isConceptTrack) {
+    schemaParts.push(`"problem": {"concept": "3-5 sentences explaining the UNDERLYING TOPIC in plain human language — WHAT this concept is, WHY it exists, WHAT problem it solves. Written for someone who has never heard the term. No jargon without a plain-English gloss on first use.", "setup": "1-2 sentences framing the exact prompt an interviewer would read: 'Design X', 'Walk me through how X works', etc.", "examples": [{"input": "the SITUATION (e.g. '100M daily tweets, read-heavy fanout'), ", "output": "the DECISION (e.g. 'fan-out on write with Redis sorted sets')", "explanation": "ONE sentence on WHY that decision beats the obvious alternative in this situation"}], "imageQuery": "google image query for a conceptual diagram, or empty"}`);
+  } else {
+    schemaParts.push(`"problem": {"concept": "2-3 sentences explaining the UNDERLYING CONCEPT in plain human language, as if to someone who has never seen a LeetCode problem — e.g. for Two Sum: 'you have a list of numbers and want to find two that add up to a target; the question is how to do that without checking every pair'", "setup": "then the LeetCode-style framing in 1-2 sentences: what is given, what to return", "examples": [{"input": "exact input in code-like notation, e.g. nums=[2,7,11,15], target=9", "output": "exact return value in code-like notation, e.g. [0,1]", "explanation": "ONE sentence connecting the input to the output in plain words — the WHY, not just the WHAT"}], "imageQuery": "google image query for a problem diagram, or empty"}`);
+    schemaParts.push(`"intuition": {"setup": "lead-in sentence", "trick": "the key insight in one sentence", "whyItWorks": "2-3 sentences explaining the invariant", "imageQuery": "google image query for an intuition visualization, or empty"}`);
+  }
   if (plan.includes("dryRun")) {
     schemaParts.push(`"dryRun": {"example": "the specific input traced", "steps": [{"call": "pow(2,10)", "returns": "32*32 = 1024", "note": "optional 1-sentence explanation of what state looks like after this step"}], "realWorldCaseStudy": {"company": "a specific real company or product (e.g. 'Robinhood real-time price feed', 'Instagram story ring', 'Postgres index scan')", "problemContext": "3-4 sentences describing the SPECIFIC engineering problem that company faces where this exact algorithm/pattern earns its keep. Name the scale (requests/sec, data volume), the constraint (latency budget, memory ceiling), and WHO suffers if it goes wrong (user, downstream service).", "solutionApproach": "3-4 sentences on HOW the pattern maps to that production code. Reference the data structure, the invariant, the complexity win. Make it feel like you've worked on it.", "outcome": "2 sentences on the measurable win (p99 latency dropped from X to Y, memory went from O(n) to O(log n), the engineer avoided writing a cron job).", "imageQueries": ["2-3 google image search queries that would return teaching diagrams, product screenshots, or architecture visualizations relevant to this case study"]}, "realWorldScenario": "fallback plain-text 2-3 sentence version IF the structured caseStudy above is not populated — keep empty if caseStudy is filled", "realWorldImageQuery": "fallback single image query — keep empty if caseStudy.imageQueries is filled", "imageQuery": "call-stack or trace visualization query, or empty"}`);
   }
   if (plan.includes("code")) {
     schemaParts.push(`"code": {"language": "${codeLang}", "source": "FULL ${codeLang.toUpperCase()} solution with correct indentation and newlines", "lineExplanations": [{"line": "a key line from source", "why": "what it does and why it must be there"}]}`);
   }
-  schemaParts.push(`"edgeCases": ["edge case 1", "edge case 2", "edge case 3"]`);
+  if (plan.includes("edgeCases")) {
+    schemaParts.push(`"edgeCases": ["edge case 1", "edge case 2", "edge case 3"]`);
+  }
   if (plan.includes("complexity")) {
     schemaParts.push(`"complexity": {"time": "O(log n)", "timeWhy": "1-2 sentences", "space": "O(log n)", "spaceWhy": "1-2 sentences"}`);
+  }
+  if (plan.includes("coreAnswer")) {
+    schemaParts.push(`"coreAnswer": {"tldr": "ONE confident sentence that answers the interview prompt — e.g. 'Use a monotonic-stack sliding window because the window invariant is single-pass maintainable'", "points": ["3-5 crisp bullet points, each a complete sentence, in the ORDER a senior candidate would present them aloud. Point 1 = the answer. Point 2 = the key constraint it respects. Point 3 = the mechanism. Point 4 = the trade-off they consciously accepted. Point 5 = how they'd evolve it under scale."], "explanation": "3-5 sentence narrative, written as if the student is RECITING it to an interviewer — first person is fine. Must flow naturally, use real engineering vocabulary, and explain WHY each point lands where it does."}`);
+  }
+  if (plan.includes("realWorldCases")) {
+    schemaParts.push(`"realWorldCases": [{"company": "a specific real company or product (e.g. 'Netflix Zuul', 'Stripe idempotency keys', 'Postgres MVCC')", "useCase": "the exact feature/subsystem that uses this pattern — 2-6 words", "narrative": "3-5 sentences in the voice of a staff engineer who has worked on it: what the company needs, how this concept powers that, the scale/latency numbers, who hurts if it breaks", "imageQueries": ["2-3 google image search queries that return TEACHING diagrams or architecture visualizations — e.g. 'netflix zuul architecture diagram', 'stripe idempotency flow'"]}, ... GIVE 2 TO 3 CASES]`);
   }
   if (plan.includes("tradeoffs")) {
     schemaParts.push(`"tradeoffs": [{"pro": "advantage", "con": "cost"}, ...]`);
@@ -1146,13 +1230,23 @@ function buildSystemPrompt(kind, plan, { rebuildMode = false } = {}) {
   schemaParts.push(`"interviewPointers": [{"question": "exact follow-up an interviewer actually asks after this problem", "answer": "3-5 sentence complete model answer — specific, technical, confident, references the right data structure / complexity / edge case"}]`);
   schemaParts.push(`"revisionNotes": ["3 short flashcard-sized points to remember"]`);
   schemaParts.push(`"youtubeQuery": "4-8 word YouTube search for a top-tier explainer"`);
-  schemaParts.push(`"quiz": [
-    {"question": "Q1 EASY recall — direct from the problem/example", "options": ["A", "B", "C", "D"], "correctIdx": 0, "explanation": "why"},
-    {"question": "Q2 MEDIUM concept check — tests understanding of the intuition", "options": ["A", "B", "C", "D"], "correctIdx": 1, "explanation": "why"},
-    {"question": "Q3 MEDIUM dry-run — asks what a specific call returns or what state looks like at a step", "options": ["A", "B", "C", "D"], "correctIdx": 2, "explanation": "why"},
-    {"question": "Q4 HARD edge case — tests whether the student caught the gotcha", "options": ["A", "B", "C", "D"], "correctIdx": 3, "explanation": "why"},
-    {"question": "Q5 HARD interview follow-up — tests the pointer section", "options": ["A", "B", "C", "D"], "correctIdx": 0, "explanation": "why"}
-  ]`);
+  if (isConceptTrack) {
+    schemaParts.push(`"quiz": [
+      {"question": "Q1 EASY recall — direct from the problem/concept framing", "options": ["A", "B", "C", "D"], "correctIdx": 0, "explanation": "why"},
+      {"question": "Q2 MEDIUM — tests the ONE-SENTENCE model answer (coreAnswer.tldr): the student must recognize the right stance", "options": ["A", "B", "C", "D"], "correctIdx": 1, "explanation": "why"},
+      {"question": "Q3 MEDIUM — real-world case study: tests whether the student remembers WHICH company uses this and WHY (ties to realWorldCases)", "options": ["A", "B", "C", "D"], "correctIdx": 2, "explanation": "why"},
+      {"question": "Q4 HARD — trade-off: picks the SPECIFIC cost that an interviewer wants named (ties to tradeoffs)", "options": ["A", "B", "C", "D"], "correctIdx": 3, "explanation": "why"},
+      {"question": "Q5 HARD interview follow-up — tests one of the interviewPointers model answers", "options": ["A", "B", "C", "D"], "correctIdx": 0, "explanation": "why"}
+    ]`);
+  } else {
+    schemaParts.push(`"quiz": [
+      {"question": "Q1 EASY recall — direct from the problem/example", "options": ["A", "B", "C", "D"], "correctIdx": 0, "explanation": "why"},
+      {"question": "Q2 MEDIUM concept check — tests understanding of the intuition", "options": ["A", "B", "C", "D"], "correctIdx": 1, "explanation": "why"},
+      {"question": "Q3 MEDIUM dry-run — asks what a specific call returns or what state looks like at a step", "options": ["A", "B", "C", "D"], "correctIdx": 2, "explanation": "why"},
+      {"question": "Q4 HARD edge case — tests whether the student caught the gotcha", "options": ["A", "B", "C", "D"], "correctIdx": 3, "explanation": "why"},
+      {"question": "Q5 HARD interview follow-up — tests the pointer section", "options": ["A", "B", "C", "D"], "correctIdx": 0, "explanation": "why"}
+    ]`);
+  }
 
   const rebuildBlock = rebuildMode ? `
 REBUILD MODE — the previous version failed the quiz. The student is sincere, you were too abstract. Rewrite SIMPLER:
@@ -1221,7 +1315,7 @@ TEACHING CRAFT (apply across every text field — this is what separates a good 
 STRUCTURAL RULES:
 - Return the EXACT keys above. Do not add or drop keys.
 - Images: for every imageQuery, pick a search phrase that returns a TEACHING DIAGRAM (not stock photo, not a person). Return empty string if no diagram helps.
-- Code: ${isProgrammatic ? `FULL compilable ${codeLang.toUpperCase()} code block in LeetCode submission style. ${codeLang === "java" ? "Write `class Solution { ... }` with the method signature exactly as LeetCode gives it. Assume all standard imports (java.util.*, java.util.stream.*) are already available — don't write import statements." : "Write a single well-formatted query."} Correct indentation.` : "no code field needed"}
+${isConceptTrack ? `- CONCEPT-TRACK ONLY: do NOT include a "code" field, do NOT include a "complexity" field, do NOT include a "dryRun" field, do NOT include an "intuition" field. The coreAnswer + realWorldCases carry the teaching. Keep realWorldCases to EXACTLY 2 or 3 entries; each must name a REAL company and a REAL feature — never invented. Each case needs 2-3 imageQueries that would surface diagrams or product screenshots.` : `- Code: ${isProgrammatic ? `FULL compilable ${codeLang.toUpperCase()} code block in LeetCode submission style. ${codeLang === "java" ? "Write \`class Solution { ... }\` with the method signature exactly as LeetCode gives it. Assume all standard imports (java.util.*, java.util.stream.*) are already available — don't write import statements." : "Write a single well-formatted query."} Correct indentation.` : "no code field needed"}`}
 - Quiz difficulty — a serious student who read the lesson or watched the video gets ≥3/5. A skimmer risks failing.
   * Q1 recall: direct from problem/example. Easy IF read.
   * Q2 concept: tests the "trick" — paraphrased, not quoted.
@@ -2258,6 +2352,85 @@ function injectStyles() {
     }
     .lsn-cs-gallery .lsn-img { margin: 0; }
     @media (max-width: 560px) { .lsn-cs-gallery { grid-template-columns: 1fr; } }
+
+    /* ---- CONCEPT-TRACK sections (coreAnswer + realWorldCases) for SD/Int/Ext ---- */
+    .lsn-core-answer { }
+    .lsn-ca-sub {
+      margin: 0 0 18px; font: 500 13.5px/1.55 var(--font-sans); color: var(--mut);
+    }
+    .lsn-ca-tldr {
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 16px 18px; margin-bottom: 16px;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 14%, var(--paper)) 0%, color-mix(in oklab, var(--gold) 4%, var(--paper)) 100%);
+      border: 1px solid color-mix(in oklab, var(--gold) 32%, var(--line));
+      border-radius: 12px;
+      box-shadow: 0 2px 6px -2px color-mix(in oklab, var(--gold) 20%, transparent);
+    }
+    .lsn-ca-tldr-tag {
+      font: 800 10.5px/1 var(--font-sans); letter-spacing: .18em; text-transform: uppercase;
+      color: var(--gold); flex-shrink: 0; padding-top: 3px;
+    }
+    .lsn-ca-tldr p { margin: 0; font: 600 15.5px/1.55 var(--font-sans); color: var(--ink); letter-spacing: -.005em; }
+    .lsn-ca-points {
+      padding: 16px 18px; margin-bottom: 14px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+    }
+    .lsn-ca-points-label {
+      font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase;
+      color: var(--mut); margin-bottom: 12px;
+    }
+    .lsn-ca-points ol {
+      margin: 0; padding-left: 28px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .lsn-ca-points li {
+      font: 500 14.5px/1.6 var(--font-sans); color: var(--ink); padding-left: 4px;
+    }
+    .lsn-ca-points li::marker {
+      font-weight: 800; color: var(--gold);
+    }
+    .lsn-ca-explain {
+      padding: 16px 18px; margin-bottom: 4px;
+      background: color-mix(in oklab, var(--ink) 3%, var(--paper));
+      border: 1px solid var(--line); border-radius: 12px;
+      border-left: 3px solid var(--ink);
+    }
+    .lsn-ca-explain-label {
+      font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase;
+      color: var(--mut); margin-bottom: 8px;
+    }
+    .lsn-ca-explain p { margin: 0; font: 500 14.5px/1.7 var(--font-sans); color: var(--ink); }
+
+    /* Real-world cases — multiple cards, each with its own gallery */
+    .lsn-rwc-sub {
+      margin: 0 0 18px; font: 500 13.5px/1.55 var(--font-sans); color: var(--mut);
+    }
+    .lsn-rwc-list { display: flex; flex-direction: column; gap: 16px; }
+    .lsn-rwc-card {
+      padding: 18px 20px;
+      background: color-mix(in oklab, var(--blue, #3870ff) 4%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 22%, var(--line));
+      border-radius: 14px;
+      box-shadow: 0 2px 6px -3px rgba(0,0,0,.06);
+    }
+    .lsn-rwc-head {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 14px;
+      margin-bottom: 10px;
+    }
+    .lsn-rwc-badge {
+      font: 800 10px/1 var(--font-sans); letter-spacing: .18em; text-transform: uppercase;
+      color: var(--blue, #3870ff);
+      padding: 4px 8px; border-radius: 5px;
+      background: color-mix(in oklab, var(--blue, #3870ff) 14%, var(--paper));
+    }
+    .lsn-rwc-company { font: 700 17px/1.3 var(--font-sans); color: var(--ink); letter-spacing: -.012em; }
+    .lsn-rwc-usecase { font: 500 12.5px/1.3 var(--font-sans); color: var(--mut); }
+    .lsn-rwc-narr { margin: 0 0 14px; font: 500 14.5px/1.7 var(--font-sans); color: var(--ink); }
+    .lsn-rwc-gallery {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .lsn-rwc-gallery .lsn-img { margin: 0; }
+    @media (max-width: 560px) { .lsn-rwc-gallery { grid-template-columns: 1fr; } }
 
     /* Interview-pointer Q&A collapsibles */
     .lsn-pointer-qas { display: flex; flex-direction: column; gap: 10px; }

@@ -324,7 +324,7 @@ async function askGroqForSuggestion(state) {
   if (!sheet) throw new Error(`${sheetName} sheet isn't loaded`);
 
   const context = computeContext();
-  const candidates = buildCandidatePool(sheet, state.difficulty, context);
+  const candidates = buildCandidatePool(sheet, state.difficulty, context, sheetName);
   if (!candidates.length) return null;
 
   // Attach source metadata so the UI can prove "this came from your sheet".
@@ -425,7 +425,7 @@ function handRollRationale(pick, state, context, reason) {
   return bits.join(" ");
 }
 
-function buildCandidatePool(sheet, difficulty, context) {
+function buildCandidatePool(sheet, difficulty, context, sheetName) {
   const titleCol = sheet.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
   const patternCol = sheet.headers.find(h => /^(pattern|category)$/i.test(h));
   const diffCol = sheet.headers.find(h => /^difficulty$/i.test(h));
@@ -448,7 +448,7 @@ function buildCandidatePool(sheet, difficulty, context) {
     const pattern = r[patternCol] || "";
     const freq = r[freqCol] || "";
     rows.push({
-      sheet: sheet.name || null,
+      sheet: sheetName || null,
       rowIndex: i,
       title: title.trim(),
       pattern: pattern || "",
@@ -478,7 +478,7 @@ function buildCandidatePool(sheet, difficulty, context) {
   // Price everything via engine's priceTask
   const settings = getSettings();
   const kindMap = { DSA: "dsa", "System Design": "sd", "Integrations": "int", "Interview Extras": "ext", "SQL": "sql" };
-  const kind = kindMap[sheet.name] || "dsa";
+  const kind = kindMap[sheetName] || "dsa";
   for (const r of rows) {
     r.kind = kind;
     r.value = priceTask({ kind, difficulty: r.difficulty, minutes: r.minutes, freq: r.freq }, settings);
