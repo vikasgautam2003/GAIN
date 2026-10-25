@@ -2,7 +2,7 @@
 // Daily engine lives in engine.js; full celebration + add-task in Part 3.
 
 import { getSettings, getSheets, getDayLog, updateWallet, getWallet, on, getMotivations, updateSheetRow } from "./store.js";
-import { ensureDailyPlan, tickTask, untickTask, todayKey, calendarKey, activeKey, nextDayKey, hoursToRollover, isGreenWeek, isGreenMonth, wasWeekFired, wasMonthFired, markWeekFired, markMonthFired, setConfidence, getConfidence, setReviewOverride, getReviewOverride, capTaskValue, maybeFirePerfectWeek, carryOverUnfinished } from "./engine.js";
+import { ensureDailyPlan, tickTask, untickTask, todayKey, calendarKey, activeKey, nextDayKey, hoursToRollover, isGreenWeek, isGreenMonth, wasWeekFired, wasMonthFired, markWeekFired, markMonthFired, setConfidence, getConfidence, setReviewOverride, getReviewOverride, capTaskValue, maybeFirePerfectWeek, carryOverUnfinished, priceTask } from "./engine.js";
 import { tryOpenRecap } from "./recap.js";
 import { ensureWarmupTask, openWarmupQuiz } from "./warmup.js";
 import { openLessonModal } from "./lesson.js";
@@ -1446,12 +1446,19 @@ function attachHandlers(root) {
     if (!suggestEl) return;
     suggestions = list;
     if (!list.length && !needle) { closeSuggest(); return; }
-    const items = list.map((m, i) => `
-      <div class="asg-item ${m.alreadySolved ? "solved" : ""} ${i === suggestIdx ? "active" : ""}" data-idx="${i}" role="option">
-        <div class="asg-title">${esc(m.title)}${m.alreadySolved ? ' <span class="asg-solved-tag">✓ solved ${esc(m.solvedAgo || "")}</span>'.replace("${esc(m.solvedAgo || \"\")}", esc(m.solvedAgo || "")) : ""}</div>
-        <div class="asg-meta">${esc(m.sheetLabel)}${m.difficulty ? " · " + esc(m.difficulty) : ""}${m.pattern ? " · " + esc(m.pattern) : ""}${m.lcNum ? " · LC#" + esc(m.lcNum) : ""}${m.freq && /^high$/i.test(m.freq) ? ' <span class="asg-high">HIGH</span>' : ""}</div>
-      </div>
-    `).join("");
+    const items = list.map((m, i) => {
+      const solvedTag = m.alreadySolved ? ` <span class="asg-solved-tag">✓ solved ${esc(m.solvedAgo || "")}</span>` : "";
+      const highTag = (m.freq && /^high$/i.test(m.freq)) ? ' <span class="asg-high">HIGH</span>' : "";
+      const metaParts = [esc(m.sheetLabel)];
+      if (m.difficulty) metaParts.push(esc(m.difficulty));
+      if (m.pattern) metaParts.push(esc(m.pattern));
+      if (m.lcNum) metaParts.push("LC#" + esc(m.lcNum));
+      return `
+        <div class="asg-item ${m.alreadySolved ? "solved" : ""} ${i === suggestIdx ? "active" : ""}" data-idx="${i}" role="option">
+          <div class="asg-title">${esc(m.title)}${solvedTag}</div>
+          <div class="asg-meta">${metaParts.join(" · ")}${highTag}</div>
+        </div>`;
+    }).join("");
     const addNewRow = needle ? `<div class="asg-item asg-new ${suggestIdx === list.length ? "active" : ""}" data-idx="${list.length}" role="option">
       <div class="asg-title">+ Add "<b>${esc(needle)}</b>" as a new problem</div>
       <div class="asg-meta">Creates a fresh row in the matching sheet</div>
@@ -1629,18 +1636,22 @@ function searchAcrossSheets(sheets, rawNeedle) {
   if (needle.length < 2) return [];
   const words = needle.split(/\s+/).filter(w => w.length >= 2);
 
-  const SHEET_KIND_MAP = {
-    "01_DSA_SHEET.csv": { kind: "dsa", label: "DSA" },
-    "02_SYSTEM_DESIGN_SHEET.csv": { kind: "sd", label: "System Design" },
-    "03_INTEGRATIONS_PLATFORMS_SHEET.csv": { kind: "int", label: "Integrations" },
-    "04_FDE_INTERVIEW_EXTRAS.csv": { kind: "ext", label: "Extras" },
-    "05_SQL_SHEET.csv": { kind: "sql", label: "SQL" },
+  // Infer kind + display label from the sheet's `type` field or filename.
+  const inferMeta = (sheetName, sh) => {
+    const type = String(sh?.type || "").toLowerCase();
+    const name = sheetName.toLowerCase();
+    if (type === "dsa" || /dsa/.test(name)) return { kind: "dsa", label: "DSA" };
+    if (type === "sql" || /sql/.test(name)) return { kind: "sql", label: "SQL" };
+    if (type === "sd"  || /system.?design/.test(name)) return { kind: "sd", label: "System Design" };
+    if (type === "int" || /integration|platform/.test(name)) return { kind: "int", label: "Integrations" };
+    if (type === "ext" || /extra|interview/.test(name)) return { kind: "ext", label: "Extras" };
+    return { kind: "dsa", label: sheetName.replace(/\.csv$/i, "").replace(/^\d+_/, "").replace(/_/g, " ") };
   };
 
   const results = [];
   for (const [sheetName, sh] of Object.entries(sheets)) {
     if (!sh || !Array.isArray(sh.rows) || !sh.headers?.length) continue;
-    const meta = SHEET_KIND_MAP[sheetName] || { kind: "dsa", label: sheetName };
+    const meta = inferMeta(sheetName, sh);
     const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
     if (!titleCol) continue;
     const patternCol = sh.headers.find(h => /^(pattern|category)$/i.test(h));
@@ -2330,6 +2341,7 @@ function styles() {
     }
     .today .add-row input::placeholder { color: var(--mut); }
     .today .add-input-wrap { position: relative; flex: 1; display: flex; flex-direction: column; }
+    .today .add-pickchip[hidden] { display: none !important; }
     .today .add-pickchip {
       display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
       padding: 4px 8px 4px 10px; margin-bottom: 4px;
@@ -2339,6 +2351,7 @@ function styles() {
       font: 600 11.5px/1.1 var(--font-sans); color: var(--blue);
       letter-spacing: .01em;
     }
+    .today .add-suggest[hidden] { display: none !important; }
     .today .add-pickchip .apk-core { white-space: nowrap; }
     .today .add-pickchip .apk-redo {
       display: inline-block; margin-left: 6px;
