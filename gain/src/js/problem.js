@@ -11,6 +11,7 @@ import { openLessonModal } from "./lesson.js";
 import { infoIcon, renderMarkdown } from "./info.js";
 import { priceTask, todayKey, capTaskValue } from "./engine.js";
 import { fireTaskBagged } from "./celebrate.js";
+import { companyChipHtml } from "./companies.js";
 
 let unsub = null;
 let timerState = null;
@@ -239,24 +240,29 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
 
 
   // --- Company tags editor ---
-  const companyCol = sheet.headers.find(h => /^compan(y|ies)$/i.test(h));
+  const sheet = getSheets()[sheetName];
+  const resolveCompanyCol = () => sheet?.headers?.find(h => /^compan(y|ies)$/i.test(h)) || null;
   const parseCompanies = (raw) => String(raw || "").split(",").map(s => s.trim()).filter(Boolean);
+  const currentCompanies = () => {
+    const col = resolveCompanyCol();
+    return parseCompanies(col ? row[col] : "");
+  };
   const paintCompanies = () => {
     const chipsEl = root.querySelector("#pcr-chips");
-    const current = parseCompanies(companyCol ? row[companyCol] : "");
-    chipsEl.innerHTML = current.map(c =>
-      `<span class="pcr-chip" data-c="${esc(c)}">${esc(c)}<button class="pcr-x" aria-label="Remove ${esc(c)}">×</button></span>`
-    ).join("");
+    const current = currentCompanies();
+    chipsEl.innerHTML = current.map(c => companyChipHtml(c, true)).join("");
   };
   const saveCompanies = async (list) => {
+    if (!sheet) return;
     const dedupe = [...new Set(list.map(s => s.trim()).filter(Boolean))];
-    const col = companyCol || "Companies";
-    if (!companyCol) {
-      // Add the column to the sheet in memory + persist
-      sheet.headers.push("Companies");
+    const serialized = dedupe.join(", ");
+    let col = resolveCompanyCol();
+    if (!col) {
+      col = "Companies";
+      sheet.headers.push(col);
     }
-    row[col] = dedupe.join(", ");
-    await updateSheetRow(sheetName, idx, { [col]: dedupe.join(", ") });
+    row[col] = serialized;
+    await updateSheetRow(sheetName, idx, { [col]: serialized });
     paintCompanies();
   };
   paintCompanies();
@@ -266,10 +272,8 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
     e.preventDefault();
     const v = pcrInput.value.trim();
     if (!v) return;
-    const list = parseCompanies(companyCol ? row[companyCol] : "");
-    list.push(v);
     pcrInput.value = "";
-    await saveCompanies(list);
+    await saveCompanies([...currentCompanies(), v]);
   });
   root.querySelector("#pcr-chips")?.addEventListener("click", async (e) => {
     const x = e.target.closest(".pcr-x");
@@ -277,8 +281,7 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
     const chip = x.closest(".pcr-chip");
     const toRemove = chip?.dataset.c;
     if (!toRemove) return;
-    const list = parseCompanies(companyCol ? row[companyCol] : "").filter(c => c !== toRemove);
-    await saveCompanies(list);
+    await saveCompanies(currentCompanies().filter(c => c !== toRemove));
   });
 
   // --- LC URL input: write back to the sheet ---
@@ -719,7 +722,10 @@ function styles() {
     .prob .prob-companies-row { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; flex-wrap: wrap; }
     .prob .pcr-label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
     .prob .pcr-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
-    .prob .pcr-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px 4px 10px; border-radius: 999px; background: color-mix(in oklab, var(--blue, #3870ff) 12%, var(--paper)); border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 32%, var(--line)); color: var(--blue, #3870ff); font: 600 11.5px/1 var(--font-sans); letter-spacing: .01em; }
+    .prob .pcr-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line2); color: var(--ink); font: 600 11.5px/1 var(--font-sans); letter-spacing: .01em; }
+    .prob .pcr-logo { width: 22px; height: 22px; border-radius: 50%; background: var(--bg); object-fit: contain; display: inline-block; flex-shrink: 0; }
+    .prob .pcr-logo-fallback { display: inline-flex; align-items: center; justify-content: center; font: 700 11px/1 var(--font-sans); color: var(--mut); background: var(--bg); }
+    .prob .pcr-name { display: inline-block; }
     .prob .pcr-x { border: none; background: transparent; color: var(--mut); cursor: pointer; font: 400 13px/1 var(--font-sans); padding: 0 2px; transition: color .14s; }
     .prob .pcr-x:hover { color: var(--red); }
     .prob #pcr-input { padding: 6px 10px; border: 1px dashed var(--line2); border-radius: 999px; background: transparent; color: var(--ink); font: 500 12px/1 var(--font-sans); outline: none; width: 120px; }

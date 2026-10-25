@@ -352,12 +352,14 @@ function paintPlan(root) {
       `;
     }
     const chips = chipsFor(t);
+    const companyChips = companyChipsFor(t);
     return `
       <div class="task-row ${done ? "done" : ""} ${needsRating ? "capture" : ""} ${isRevisit ? "revisit" : ""}" data-ref="${esc(t.ref)}">
         <button class="checkbox ${done ? "done" : ""}" data-ref="${esc(t.ref)}" aria-label="Toggle ${esc(t.title)}"></button>
         <div class="task-main">
           <div class="task-title-row">
             <div class="task-title">${kindPill}${kindPill ? " " : ""}${esc(t.title)}</div>
+            ${companyChips}
             ${chips ? `<div class="hover-chips">${chips}</div>` : ""}
           </div>
           <div class="task-meta">${esc(subFor(t))}</div>
@@ -1886,6 +1888,47 @@ function chipsFor(t) {
   }
   return bits.join("");
 }
+
+// Always-visible company logo row for a task. Returns "" if no companies.
+function companyChipsFor(t) {
+  if (!t.sheet || t.rowIndex == null) return "";
+  const sh = getSheets()[t.sheet];
+  const row = sh?.rows?.[t.rowIndex];
+  if (!row || !sh.headers?.length) return "";
+  const col = sh.headers.find(h => /^compan(y|ies)$/i.test(h));
+  if (!col || !row[col]) return "";
+  const companies = String(row[col]).split(",").map(s => s.trim()).filter(Boolean).slice(0, 5);
+  if (!companies.length) return "";
+  return `<span class="task-companies">${companies.map(c =>
+    `<span class="task-company" title="${esc(c)}"><img src="${esc(logoUrlFor(c, 32))}" alt="${esc(c)}" onerror="this.onerror=null;this.src='${esc(faviconFor(c, 32))}';" /></span>`
+  ).join("")}</span>`;
+}
+
+// Lightweight local versions of logoUrl / favicon so today.js stays import-light.
+function logoUrlFor(name, size) {
+  const d = _domainFor(name);
+  return d ? `https://logo.clearbit.com/${d}?size=${size}` : "";
+}
+function faviconFor(name, size) {
+  const d = _domainFor(name);
+  return d ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=${size * 2}` : "";
+}
+const _COMPANY_DOMAINS = {
+  google:"google.com",meta:"meta.com",facebook:"meta.com",amazon:"amazon.com",apple:"apple.com",microsoft:"microsoft.com",
+  palantir:"palantir.com",netflix:"netflix.com",uber:"uber.com",stripe:"stripe.com",linear:"linear.app",openai:"openai.com",
+  anthropic:"anthropic.com",tesla:"tesla.com",nvidia:"nvidia.com",airbnb:"airbnb.com",linkedin:"linkedin.com",atlassian:"atlassian.com",
+  oracle:"oracle.com",ibm:"ibm.com",intel:"intel.com",cisco:"cisco.com",cloudflare:"cloudflare.com",notion:"notion.so",figma:"figma.com",
+  slack:"slack.com",github:"github.com",dropbox:"dropbox.com",snap:"snap.com",x:"x.com",twitter:"twitter.com",tiktok:"tiktok.com",
+  bytedance:"bytedance.com",pinterest:"pinterest.com",doordash:"doordash.com",instacart:"instacart.com",zoom:"zoom.us",
+  rocketlane:"rocketlane.com",
+};
+function _domainFor(name) {
+  if (!name) return "";
+  const n = String(name).toLowerCase().trim();
+  if (_COMPANY_DOMAINS[n]) return _COMPANY_DOMAINS[n];
+  const slug = n.replace(/\s+/g, "").replace(/[^a-z0-9-]/g, "");
+  return slug ? `${slug}.com` : "";
+}
 function badgeFor(t) {
   // Note: difficulty for DSA now lives in a hover-chip, not the badge.
   // The badge is just a status cue — "Pending" with a tiny bolt glyph.
@@ -2993,6 +3036,19 @@ function styles() {
     .today .task-row:focus-within .hover-chips {
       opacity: 1; transform: translateX(0);
     }
+    /* Company logo mini-chips — always visible on task rows */
+    .today .task-companies {
+      display: inline-flex; align-items: center; gap: 3px;
+      margin-left: 6px; flex-shrink: 0;
+    }
+    .today .task-company {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; border-radius: 50%;
+      overflow: hidden;
+      background: #fff; border: 1px solid var(--line);
+      flex-shrink: 0; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .today .task-company img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .today .hover-chip {
       padding: 2px 8px; border-radius: 6px;
       font: 600 10.5px/1.3 var(--font-sans);

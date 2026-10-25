@@ -290,12 +290,26 @@ function openPatternDetail(root, patternName) {
   band.className = `m-d-eyebrow band-${pattern.band}`;
   band.textContent = BAND_LABELS[pattern.band] || pattern.band;
 
+  // Collect last 10 solves across every problem in this pattern (for sparkline)
+  const allSolves = [];
+  for (const [key, meta] of ctx.rowIndex.entries()) {
+    if (meta.pattern !== patternName) continue;
+    const solves = ctx.solvesByKey.get(key) || [];
+    for (const s of solves) allSolves.push({ ...s });
+  }
+  allSolves.sort((a, b) => a.daysAgo - b.daysAgo);
+  const spark = allSolves.slice(0, 12).reverse();
+  const sparkHtml = spark.length ? renderSparkline(spark) : "";
+
   const statsEl = root.querySelector("#m-d-stats");
   statsEl.innerHTML = `
-    <span>Score: <b>${pattern.score != null ? pattern.score.toFixed(2) : "—"}</b></span>
-    <span>Problems: <b>${pattern.uniqueSolved}/${pattern.totalProblems}</b></span>
-    <span>Solves: <b>${pattern.solveCount}</b></span>
-    ${pattern.daysSinceLatest != null ? `<span>Last touched: <b>${formatDaysAgo(pattern.daysSinceLatest)}</b></span>` : ""}
+    <div class="m-d-stat-row">
+      <span class="m-d-stat"><label>Score</label><b>${pattern.score != null ? pattern.score.toFixed(2) : "—"}</b></span>
+      <span class="m-d-stat"><label>Problems</label><b>${pattern.uniqueSolved}/${pattern.totalProblems}</b></span>
+      <span class="m-d-stat"><label>Solves</label><b>${pattern.solveCount}</b></span>
+      ${pattern.daysSinceLatest != null ? `<span class="m-d-stat"><label>Last</label><b>${formatDaysAgo(pattern.daysSinceLatest)}</b></span>` : ""}
+    </div>
+    ${sparkHtml ? `<div class="m-d-spark"><label>Last ${spark.length} solves →</label>${sparkHtml}</div>` : ""}
   `;
 
   // List problems in this pattern
@@ -307,13 +321,13 @@ function openPatternDetail(root, patternName) {
     const latest = sorted[0];
     problemList.push({
       key, title: meta.title, difficulty: meta.difficulty,
+      sheetName: meta.sheetName, rowIndex: meta.rowIndex,
       solveCount: solves.length,
       latestStars: latest?.stars ?? null,
       daysAgo: latest?.daysAgo ?? null,
     });
   }
   problemList.sort((a, b) => {
-    // Unsolved last, then weakest first among solved
     if (a.solveCount === 0 && b.solveCount === 0) return 0;
     if (a.solveCount === 0) return 1;
     if (b.solveCount === 0) return -1;
@@ -323,22 +337,93 @@ function openPatternDetail(root, patternName) {
   const body = root.querySelector("#m-d-body");
   body.innerHTML = `
     <div class="m-plist">
-      ${problemList.map(p => `
-        <a class="m-prow" href="#problem/${encodeURIComponent(p.key.split("#")[0])}/${p.key.split("#")[1]}">
-          <div class="m-prow-main">
-            <div class="m-prow-title">${esc(p.title)}</div>
-            <div class="m-prow-meta">${esc(p.difficulty || "—")}${p.solveCount > 0 ? ` · ${p.solveCount} solve${p.solveCount === 1 ? "" : "s"}` : " · unsolved"}</div>
+      ${problemList.map(p => {
+        const diffBadge = p.difficulty ? `<span class="m-diff m-diff-${p.difficulty.toLowerCase().replace(/[^a-z]/g, "")}">${esc(p.difficulty)}</span>` : "";
+        const starLine = p.latestStars != null
+          ? `<span class="m-prow-stars">${"★".repeat(p.latestStars)}<span class="s-faint">${"★".repeat(5 - p.latestStars)}</span></span>`
+          : `<span class="m-prow-untouched">unsolved</span>`;
+        return `
+          <div class="m-prow" data-sheet="${esc(p.sheetName)}" data-idx="${p.rowIndex}">
+            <div class="m-prow-left">
+              <div class="m-prow-title">${esc(p.title)}</div>
+              <div class="m-prow-meta">
+                ${diffBadge}
+                ${p.solveCount > 0 ? `<span>${p.solveCount} solve${p.solveCount === 1 ? "" : "s"}</span>` : ""}
+                ${p.daysAgo != null ? `<span>${formatDaysAgo(p.daysAgo)}</span>` : ""}
+              </div>
+            </div>
+            <div class="m-prow-right">
+              ${starLine}
+              <div class="m-prow-actions">
+                <button class="m-prow-btn" data-act="add" title="Add to today's plan">+ Today</button>
+                <a class="m-prow-btn primary" href="#problem/${encodeURIComponent(p.sheetName)}/${p.rowIndex}">Open</a>
+              </div>
+            </div>
           </div>
-          <div class="m-prow-right">
-            ${p.latestStars != null ? `<span class="m-prow-stars">${"★".repeat(p.latestStars)}${"☆".repeat(5 - p.latestStars)}</span>` : `<span class="m-prow-untouched">—</span>`}
-            ${p.daysAgo != null ? `<span class="m-prow-days">${formatDaysAgo(p.daysAgo)}</span>` : ""}
-          </div>
-        </a>
-      `).join("")}
+        `;
+      }).join("")}
     </div>
   `;
 
+  // Wire add-to-today
+  body.querySelectorAll("[data-act=\"add\"]").forEach(btn => {
+    btn.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      const row = btn.closest(".m-prow");
+      await addToToday(row.dataset.sheet, +row.dataset.idx, btn);
+    });
+  });
+
   scrim.hidden = false;
+}
+
+async function addToToday(sheetName, rowIndex, btn) {
+  const { updateDayLog, getSheets, getSettings } = await import("./store.js");
+  const { todayKey, priceTask } = await import("./engine.js");
+  const dateKey = todayKey();
+  const sheets = getSheets();
+  const sh = sheets[sheetName];
+  if (!sh || !sh.rows[rowIndex]) return;
+  const r = sh.rows[rowIndex];
+  const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+  const patternCol = sh.headers.find(h => /^(pattern|category)$/i.test(h));
+  const diffCol = sh.headers.find(h => /^difficulty$/i.test(h));
+  const kind = /dsa/i.test(sheetName) ? "dsa" : /sql/i.test(sheetName) ? "sql" : /system.?design/i.test(sheetName) ? "sd" : /int/i.test(sheetName) ? "int" : "ext";
+  const task = {
+    ref: `MASTERY-${Date.now()}`,
+    kind,
+    title: String((titleCol && r[titleCol]) || "Problem").trim(),
+    pattern: patternCol ? String(r[patternCol] || "").trim() : "",
+    difficulty: diffCol ? String(r[diffCol] || "").trim() : "",
+    minutes: 40,
+    sheet: sheetName,
+    rowIndex,
+  };
+  task.value = priceTask(task, getSettings());
+  await updateDayLog(dl => {
+    const d = dl[dateKey];
+    if (!d) return;
+    if (d.assigned.some(t => t.sheet === sheetName && t.rowIndex === rowIndex)) return;
+    d.assigned.push(task);
+    d.values[task.ref] = task.value;
+  });
+  if (btn) { btn.textContent = "✓ added"; btn.disabled = true; setTimeout(() => { btn.textContent = "+ Today"; btn.disabled = false; }, 1800); }
+}
+
+function renderSparkline(solves) {
+  // solves: [{stars, daysAgo}] ordered oldest → newest
+  const W = 180, H = 32, pad = 4;
+  if (!solves.length) return "";
+  const xs = solves.map((_, i) => pad + (i * (W - pad * 2) / Math.max(1, solves.length - 1)));
+  const ys = solves.map(s => H - pad - ((s.stars - 1) / 4) * (H - pad * 2));
+  const path = xs.map((x, i) => (i === 0 ? "M" : "L") + x.toFixed(1) + "," + ys[i].toFixed(1)).join(" ");
+  const dots = xs.map((x, i) => `<circle cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="2.5" fill="var(--gold)" />`).join("");
+  return `
+    <svg class="m-spark-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" preserveAspectRatio="xMinYMid meet">
+      <path d="${path}" fill="none" stroke="var(--gold)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity=".55" />
+      ${dots}
+    </svg>
+  `;
 }
 
 const BAND_LABELS = {
@@ -473,8 +558,26 @@ function injectStyles() {
     .m-prow-meta { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .02em; }
     .m-prow-right { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
     .m-prow-stars { font: 600 12.5px/1 var(--font-sans); color: var(--gold); letter-spacing: .04em; }
-    .m-prow-untouched { font: 600 12.5px/1 var(--font-sans); color: var(--mut); }
+    .m-prow-stars .s-faint { color: color-mix(in oklab, var(--mut) 50%, var(--paper)); }
+    .m-prow-untouched { font: 600 11.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .04em; text-transform: uppercase; }
     .m-prow-days { font: 500 10.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .04em; }
+    .m-prow-left { min-width: 0; flex: 1; }
+    .m-prow-actions { display: flex; gap: 6px; margin-top: 6px; }
+    .m-prow-btn { padding: 5px 10px; border-radius: 6px; font: 600 11px/1 var(--font-sans); border: 1px solid var(--line2); background: var(--paper); color: var(--mut); cursor: pointer; text-decoration: none; transition: all .14s; }
+    .m-prow-btn:hover { color: var(--ink); border-color: var(--ink); }
+    .m-prow-btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .m-prow-btn.primary:hover { filter: brightness(1.1); }
+    .m-diff { padding: 3px 7px; border-radius: 5px; font: 700 10px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; }
+    .m-diff-easy   { background: color-mix(in oklab, var(--green) 16%, var(--paper)); color: var(--green); }
+    .m-diff-medium { background: color-mix(in oklab, var(--gold) 20%, var(--paper)); color: var(--gold); }
+    .m-diff-hard   { background: color-mix(in oklab, var(--red) 16%, var(--paper)); color: var(--red); }
+    .m-d-stat-row { display: flex; flex-wrap: wrap; gap: 20px; }
+    .m-d-stat { display: inline-flex; flex-direction: column; gap: 3px; }
+    .m-d-stat label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
+    .m-d-stat b { font: 800 18px/1 var(--font-sans); color: var(--ink); letter-spacing: -.02em; }
+    .m-d-spark { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
+    .m-d-spark label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
+    .m-spark-svg { flex: 1; }
   `;
   document.head.appendChild(s);
 }

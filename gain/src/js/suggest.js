@@ -9,6 +9,24 @@ import { getSheets, getDayLog, getSettings, getWallet, callGrok, secure, updateD
 import { todayKey, activeKey, priceTask } from "./engine.js";
 import { renderMarkdown } from "./info.js";
 import { callGroqJSON } from "./groqJson.js";
+import { logoUrl as companyLogoUrl, faviconFallback as companyFavicon, parseCompanies } from "./companies.js";
+
+function renderCompanyMini(p) {
+  const sheets = getSheets();
+  const sheetName = p.poolMeta?.sheetName || p.sheetName || p.sheet;
+  if (!sheetName || p.rowIndex == null) return "";
+  const sh = sheets[sheetName];
+  if (!sh) return "";
+  const row = sh.rows?.[p.rowIndex];
+  if (!row) return "";
+  const col = sh.headers?.find(h => /^compan(y|ies)$/i.test(h));
+  if (!col) return "";
+  const companies = parseCompanies(row[col]).slice(0, 5);
+  if (!companies.length) return "";
+  return `<span class="sg-companies">${companies.map(c =>
+    `<span class="sg-company" title="${esc(c)}"><img src="${esc(companyLogoUrl(c, 32))}" alt="${esc(c)}" onerror="this.onerror=null;this.src='${esc(companyFavicon(c, 32))}';" /></span>`
+  ).join("")}</span>`;
+}
 
 const TOPIC_OPTIONS = [
   { kind: "dsa", label: "DSA",            icon: "⚡" },
@@ -204,6 +222,7 @@ function paintResult(scrim, state, callbacks) {
           ${p.pattern ? `<span class="sg-chip-mini sg-chip-pat">${esc(p.pattern)}</span>` : ""}
           ${p.difficulty ? `<span class="sg-chip-mini sg-diff-${p.difficulty.toLowerCase()}">${esc(p.difficulty)}</span>` : ""}
           ${p.lc ? `<span class="sg-chip-mini sg-chip-lc">LC #${esc(String(p.lc))}</span>` : ""}
+          ${renderCompanyMini(p)}
         </div>
       </div>
 
@@ -687,7 +706,10 @@ function injectStyles() {
       font-size: 24px; font-weight: 700; color: var(--ink);
       letter-spacing: -.015em; line-height: 1.25; margin-bottom: 12px;
     }
-    .sg-pick-sub { display: flex; flex-wrap: wrap; gap: 8px; }
+    .sg-pick-sub { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .sg-companies { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+    .sg-company { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; overflow: hidden; background: #fff; border: 1px solid var(--line); flex-shrink: 0; }
+    .sg-company img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .sg-chip-mini {
       padding: 5px 10px; border-radius: 7px;
       font: 600 11.5px/1.3 var(--font-sans); letter-spacing: .02em;
