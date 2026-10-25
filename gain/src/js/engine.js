@@ -91,6 +91,7 @@ export function priceTask(task, settings) {
   if (task.kind === "sd")       factor = 0.75;
   if (task.kind === "int")      factor = 0.65;
   if (task.kind === "ext")      factor = 0.7;
+  if (task.kind === "os")       factor = 0.7;
   if (task.freq === "HIGH")     factor = Math.min(1, factor + 0.1);
   const minutes = task.minutes || 30;
   factor = Math.min(1, factor + Math.max(0, (minutes - 30) / 120));
@@ -283,6 +284,7 @@ function inferKindFromSheetName(sheetName) {
   if (/system.?design/.test(s)) return "sd";
   if (/integration/.test(s)) return "int";
   if (/extra|interview/.test(s)) return "ext";
+  if (/\bos\b|network/.test(s)) return "os";
   return "dsa";
 }
 

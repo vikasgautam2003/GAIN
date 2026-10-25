@@ -88,6 +88,21 @@ const DOMAIN_MAP = {
   "elastic": "elastic.co",
   "redis": "redis.com",
   "rocketlane": "rocketlane.com",
+  // Added for OS / Networking seeding
+  "linux": "kernel.org",
+  "red hat": "redhat.com",
+  "redhat": "redhat.com",
+  "arm": "arm.com",
+  "juniper": "juniper.net",
+  "nginx": "nginx.com",
+  "dell": "dell.com",
+  "netapp": "netapp.com",
+  "discord": "discord.com",
+  "slack": "slack.com",
+  "auth0": "auth0.com",
+  "let's encrypt": "letsencrypt.org",
+  "lets encrypt": "letsencrypt.org",
+  "aws": "aws.amazon.com",
 };
 
 export function domainForCompany(name) {

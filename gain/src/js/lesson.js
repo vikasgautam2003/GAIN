@@ -31,6 +31,7 @@ const SECTION_PLAN = {
   sd:  ["problem", "coreAnswer", "realWorldCases", "tradeoffs", "edgeCases", "interviewPointers", "revisionNotes"],
   int: ["problem", "coreAnswer", "realWorldCases", "tradeoffs", "edgeCases", "interviewPointers", "revisionNotes"],
   ext: ["problem", "coreAnswer", "realWorldCases", "tradeoffs", "interviewPointers", "revisionNotes"],
+  os:  ["problem", "coreAnswer", "realWorldCases", "tradeoffs", "edgeCases", "interviewPointers", "revisionNotes"],
 };
 
 const KIND_LABEL = {
@@ -39,6 +40,7 @@ const KIND_LABEL = {
   sd: "System Design",
   int: "Integration / platform",
   ext: "Interview extra",
+  os: "OS / Networking",
 };
 
 // -------- public: open the lesson modal --------
@@ -925,6 +927,7 @@ function computeBounty(row, kind) {
   if (kind === "sd") factor = Math.max(factor, 0.75);
   if (kind === "int") factor = Math.max(factor, 0.65);
   if (kind === "ext") factor = Math.max(factor, 0.7);
+  if (kind === "os")  factor = Math.max(factor, 0.7);
   if (freq === "HIGH") factor = Math.min(1, factor + 0.1);
   factor = Math.min(1, factor + Math.max(0, (minutes - 30) / 120));
   // Taskmin ₹20, taskmax ₹100 — matches engine defaults; adjusts gracefully.
@@ -1691,6 +1694,7 @@ function inferKind(sheet, sheetName) {
   if (t === "sd" || /system.?design/i.test(sheetName)) return "sd";
   if (t === "int" || /integrations?/i.test(sheetName)) return "int";
   if (t === "ext" || /extras?/i.test(sheetName)) return "ext";
+  if (t === "os" || /\bos\b|networking/i.test(sheetName)) return "os";
   return "dsa";
 }
 

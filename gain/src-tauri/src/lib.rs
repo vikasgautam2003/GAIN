@@ -536,6 +536,7 @@ fn first_run_import(app: tauri::AppHandle, source_dir: String) -> Result<Vec<Str
         "03_INTEGRATIONS_PLATFORMS_SHEET.csv",
         "04_FDE_INTERVIEW_EXTRAS.csv",
         "05_SQL_SHEET.csv",
+        "06_OS_NETWORKING_SHEET.csv",
         "rewards_catalog.csv",
     ];
     let mut imported = vec![];

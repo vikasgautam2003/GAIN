@@ -106,7 +106,8 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
     { name: "System Design",file: "02_SYSTEM_DESIGN_SHEET.csv",       type: "sd",  columnMap: {} },
     { name: "Integrations", file: "03_INTEGRATIONS_PLATFORMS_SHEET.csv", type: "int",  columnMap: {} },
     { name: "Interview Extras", file: "04_FDE_INTERVIEW_EXTRAS.csv",  type: "ext", columnMap: {} },
-    { name: "SQL",          file: "05_SQL_SHEET.csv",                 type: "sql", columnMap: {} }
+    { name: "SQL",          file: "05_SQL_SHEET.csv",                 type: "sql", columnMap: {} },
+    { name: "OS & Networking", file: "06_OS_NETWORKING_SHEET.csv",    type: "os",  columnMap: {} }
   ],
   appearance: { accent: "#3b64f6", theme: "light" }
 };
@@ -520,6 +521,7 @@ export const KIND_TO_SHEET = {
   int: "Integrations",
   ext: "Interview Extras",
   sql: "SQL",
+  os:  "OS & Networking",
 };
 
 function todayKeyLocal() {

@@ -307,7 +307,7 @@ function paintPlan(root) {
     const needsRating = done && rating == null && t.kind !== "warmup";  // quiz doesn't rate
     const isRevisit = t.kind === "revisit";
     const isWarmup = t.kind === "warmup";
-    const isNewStudy = ["dsa", "sd", "int", "ext", "sql"].includes(t.kind) && !isRevisit;
+    const isNewStudy = ["dsa", "sd", "int", "ext", "sql", "os"].includes(t.kind) && !isRevisit;
     const isSuggested = !!t.suggested;
     const isCarried = !!t.carried;
     const isWildcard = !!t.wildcard;
@@ -1839,6 +1839,8 @@ function subFor(t) {
   if (t.kind === "sd")       return `System Design · ${t.minutes} min`;
   if (t.kind === "int")      return `Integrations · ${t.minutes} min`;
   if (t.kind === "ext")      return `${t.pattern || "Interview Extras"} · ${t.minutes} min`;
+  if (t.kind === "sql")      return `SQL · ${t.minutes} min`;
+  if (t.kind === "os")       return `${t.pattern || "OS & Networking"} · ${t.minutes} min`;
   return `${t.minutes || 15} min`;
 }
 
@@ -1847,7 +1849,7 @@ function subFor(t) {
 // Only shown for study-kind rows (not warmup/revision/log — those aren't the
 // problems you spend "deep focus" minutes on).
 function renderTimerButton(day, t) {
-  const studyKinds = ["dsa", "sd", "int", "ext", "sql"];
+  const studyKinds = ["dsa", "sd", "int", "ext", "sql", "os"];
   // Keep the grid cell for layout consistency even on non-study rows (revision/log/warmup).
   if (!studyKinds.includes(t.kind)) return `<span class="task-timer-slot"></span>`;
   const data = day.timeOnTask?.[t.ref] || { sec: 0 };

@@ -148,7 +148,7 @@ HARD RULES:
 3. Every task MUST have ALL fields: ref, title, minutes (int), value (int), kind, sheet (or null), seq (int or null).
 4. "title" MUST be a real problem/topic name, never a generic placeholder.
 5. Each day should have 1–${s.schedule.maxTasksPerDay} tasks. Sunday can be lighter.
-6. "kind" is one of: "dsa" | "sd" | "int" | "ext" | "revision" | "log".
+6. "kind" is one of: "dsa" | "sd" | "int" | "ext" | "sql" | "os" | "revision" | "log".
 7. "sheet" is one of: "DSA" | "System Design" | "Integrations" | "Interview Extras" | null.
 
 JSON SHAPE (reply must match this schema exactly):

@@ -360,6 +360,8 @@ function subFor(t) {
   if (t.kind === "sd")       return `System Design · ${t.minutes} min`;
   if (t.kind === "int")      return `Integrations · ${t.minutes} min`;
   if (t.kind === "ext")      return `${t.pattern || "Interview Extras"} · ${t.minutes} min`;
+  if (t.kind === "sql")      return `SQL · ${t.minutes} min`;
+  if (t.kind === "os")       return `${t.pattern || "OS & Networking"} · ${t.minutes} min`;
   return `${t.minutes || 15} min`;
 }
 

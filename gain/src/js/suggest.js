@@ -32,6 +32,7 @@ const TOPIC_OPTIONS = [
   { kind: "sd",  label: "System Design",  icon: "🏗" },
   { kind: "int", label: "Integrations",   icon: "🔌" },
   { kind: "ext", label: "Interview Extras", icon: "🎯" },
+  { kind: "os",  label: "OS & Networking", icon: "⚙" },
 ];
 
 const DIFFICULTY_OPTIONS = ["Easy", "Medium", "Hard"];
@@ -477,7 +478,7 @@ function buildCandidatePool(sheet, difficulty, context, sheetName) {
 
   // Price everything via engine's priceTask
   const settings = getSettings();
-  const kindMap = { DSA: "dsa", "System Design": "sd", "Integrations": "int", "Interview Extras": "ext", "SQL": "sql" };
+  const kindMap = { DSA: "dsa", "System Design": "sd", "Integrations": "int", "Interview Extras": "ext", "SQL": "sql", "OS & Networking": "os" };
   const kind = kindMap[sheetName] || "dsa";
   for (const r of rows) {
     r.kind = kind;
@@ -489,7 +490,7 @@ function buildCandidatePool(sheet, difficulty, context, sheetName) {
 
 function estimateMinutes(difficulty, sheetType) {
   const d = String(difficulty || "").toLowerCase();
-  if (sheetType === "sd" || sheetType === "int" || sheetType === "ext") return 25;
+  if (sheetType === "sd" || sheetType === "int" || sheetType === "ext" || sheetType === "os") return 25;
   if (d === "easy") return 25;
   if (d === "medium") return 40;
   if (d === "hard") return 55;

@@ -1548,7 +1548,7 @@ function attachHandlers(root) {
         emit: store.emit,
       });
       btn.innerHTML = `✓ ${res.rowsWritten} rows tagged · ${res.sheetsTouched} sheet${res.sheetsTouched === 1 ? "" : "s"}`;
-      localStorage.setItem("gain:companies:seeded:v1", String(Date.now()));
+      localStorage.setItem("gain:companies:seeded:v2", String(Date.now()));
       setTimeout(() => { btn.innerHTML = originalHTML; btn.disabled = false; }, 3600);
     } catch (err) {
       btn.innerHTML = `✗ ${err.message || err}`;
