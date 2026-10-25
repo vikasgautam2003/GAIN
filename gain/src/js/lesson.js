@@ -295,7 +295,7 @@ function wireSectionShells(scrim, lesson, ctx) {
       try {
         const data = await fetchSectionElaboration({
           topic: ctx.title, kind: ctx.kind, sectionKey,
-          sectionContent: body.innerText.slice(0, 1500),
+          sectionContent: body.innerText.replace(/\s+/g, " ").trim().slice(0, 800),
         });
         const card = document.createElement("div");
         card.className = "lsn-elab-card";
@@ -364,6 +364,20 @@ function openImageLightbox(src, alt) {
   box.addEventListener("click", (e) => { if (e.target === box || e.target.classList?.contains?.("lsn-lb-close")) close(); });
 }
 
+// Translate Groq's long raw error bodies into a short readable line.
+function simplifyGroqError(raw) {
+  const s = String(raw || "");
+  if (/json_validate_failed/i.test(s)) return "The model couldn't produce valid JSON after 3 attempts — try Elaborate again, or regenerate the lesson.";
+  if (/rate.?limit|429/i.test(s)) return "Groq rate-limited this request — wait a few seconds and retry.";
+  if (/api.?key|unauthoriz|401/i.test(s)) return "Groq API key invalid or missing — check Settings → AI butler.";
+  if (/timeout|timed out/i.test(s)) return "Groq timed out — try again.";
+  if (/network|fetch/i.test(s)) return "Network error reaching Groq.";
+  // Fallback: extract the "message" field from a Groq JSON error if present
+  const m = s.match(/"message":\s*"([^"]{10,200})"/);
+  if (m) return m[1];
+  return s.length > 180 ? s.slice(0, 180) + "…" : s;
+}
+
 // Groq elaboration — fires only on explicit Elaborate click. Cached forever per topic+section.
 async function fetchSectionElaboration({ topic, kind, sectionKey, sectionContent }) {
   const cacheKey = `gain:lessonElab:${sectionKey}:${topic}`;
@@ -375,25 +389,17 @@ async function fetchSectionElaboration({ topic, kind, sectionKey, sectionContent
                  (await secure.get("grok_api_key").catch(() => null));
   if (!apiKey) throw new Error("No Groq API key.");
   const label = sectionLabel(sectionKey);
-  const system = `You are a staff FDE engineer re-teaching a specific lesson section because the student did NOT follow it the first time.
-They have ALREADY read what's below — don't repeat it verbatim. Approach from a FRESH angle.
+  const system = `You are re-teaching a lesson section because the student didn't follow it the first time.
+Approach from a fresh angle — don't repeat the original verbatim. Use everyday analogies and plain words.
 
-Reply with VALID JSON only (no code fences, no preamble):
-{
-  "paragraph": "2-4 sentences explaining the same idea from a NEW angle, in plain human language",
-  "bullets": ["3-5 short points, each targeting ONE likely misunderstanding"],
-  "analogy": "ONE everyday-object analogy that makes the concept click (a book, a jar, a staircase, a line of people)"
-}
+Reply with ONLY this JSON (no fences, no preamble):
+{"paragraph": "2-4 sentences explaining the idea from a new angle in plain words", "bullets": ["3-4 short points, each tackling one common misunderstanding"], "analogy": "one everyday-object analogy in a single sentence"}
 
-Teaching craft:
-1. SHOW THE WALL — begin paragraph by naming the specific mental step the student probably tripped on. e.g. "The jump most people miss here is X."
-2. ANALOGY FIRST, CODE SECOND — explain with a physical object before any code reference.
-3. NAME THE INVARIANT — if the section is about an algorithm, state the invariant as a complete quotable sentence.
-4. NO JARGON WITHOUT A 5-WORD GLOSS — if you reuse any technical term from the original, immediately define it in parentheses.
-5. BULLETS = MISCONCEPTION KILLERS — each bullet starts with the wrong intuition and ends with the right one. Format: "Not X — it's actually Y because Z."
-6. CONCRETE NUMBERS — if the original used a worked example, your paragraph should trace a SHORTER example in human words.
-7. ONE IDEA PER SENTENCE. Max 20 words per sentence.
-8. Do NOT repeat the exact sentences from the original content.`;
+Rules:
+- paragraph: open by naming the mental step the student probably missed. One idea per sentence, max 20 words each.
+- bullets: format each as "Not X — actually Y because Z" when possible. Short.
+- analogy: a physical object or everyday situation — a book, a jar, a line of people — one sentence.
+- Do NOT quote the original content verbatim.`;
   const user = `Topic: ${topic}
 Kind: ${kind}
 Section: "${label}"
@@ -403,14 +409,18 @@ ${sectionContent}
 ---
 Please elaborate — assume they didn't understand.`;
   const res = await callGroqJSON({
-    apiKey, system, user, maxTokens: 1024, label: `elaborate:${sectionKey}`,
+    apiKey, system, user, maxTokens: 768, label: `elaborate:${sectionKey}`,
     schemaCheck: (obj) => {
-      if (!obj) return "no object";
-      if (!obj.paragraph && !obj.bullets?.length) return "paragraph or bullets required";
+      if (!obj || typeof obj !== "object") return "not an object";
+      // Accept any one of the three fields — be forgiving.
+      const hasPara = typeof obj.paragraph === "string" && obj.paragraph.trim().length > 0;
+      const hasBullets = Array.isArray(obj.bullets) && obj.bullets.length > 0;
+      const hasAnalogy = typeof obj.analogy === "string" && obj.analogy.trim().length > 0;
+      if (!hasPara && !hasBullets && !hasAnalogy) return "need paragraph, bullets, or analogy";
       return true;
     },
   });
-  if (!res.ok) throw new Error(res.error);
+  if (!res.ok) throw new Error(simplifyGroqError(res.error));
   try { localStorage.setItem(cacheKey, JSON.stringify(res.data)); } catch (_) {}
   return res.data;
 }
