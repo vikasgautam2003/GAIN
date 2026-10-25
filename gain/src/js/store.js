@@ -89,6 +89,9 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
     tierUnlocks: { small: 20, medium: 500, large: 2000, mega: 5000 }
   },
   animations: { day: "confetti", week: "lottie", month: "lottie", lottie: true, intensity: "normal", style: "confetti" },
+  // Chill Hideout — default browser for Recreation links. Empty = system default.
+  // Per-site `browser` on each recreation card overrides this.
+  recreationBrowser: "",
   sound: {
     on: true,
     volume: 0.7,
@@ -194,6 +197,7 @@ const state = {
   quotes: { earn: [], spend: [] },  // populated from JSON banks (Part 3)
   weeklyPlan: null,   // last saved weekly plan (see applyWeeklyPlan)
   solutions: {},      // { "DSA#86": "code...", ... } — problem-page solutions keyed by sheet#rowIndex
+  recreations: [],    // Chill Hideout — user-curated escape sites
   booted: false,
   listeners: new Set()
 };
@@ -253,6 +257,11 @@ export async function boot() {
     const raw = await readIfExists("solutions.json");
     if (raw) state.solutions = JSON.parse(raw) || {};
   } catch (e) { console.warn("solutions load fallback", e); }
+  // Chill Hideout — user's escape-site list
+  try {
+    const raw = await readIfExists("recreations.json");
+    if (raw) state.recreations = JSON.parse(raw) || [];
+  } catch (e) { console.warn("recreations load fallback", e); }
   // motivations — seeds always come from the code bank; only `user` persists.
   try {
     const raw = await readIfExists("motivations.json");
@@ -1260,6 +1269,84 @@ export async function setSolution(sheetName, rowIndex, text) {
   emit("solutions");
   schedule("solutions", persistSolutions);
 }
+async function persistRecreations() {
+  await writeFile("recreations.json", JSON.stringify(state.recreations, null, 2));
+}
+
+// ---- Chill Hideout: CRUD on the escape-site list ----
+export function getRecreations() { return state.recreations; }
+
+export async function addRecreation(rec) {
+  const id = "rec_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const now = Date.now();
+  state.recreations.push({
+    id,
+    url: String(rec.url || "").trim(),
+    title: String(rec.title || "").trim(),
+    category: String(rec.category || "web"),
+    note: String(rec.note || "").trim().slice(0, 120),
+    emoji: String(rec.emoji || "").trim(),
+    imageUrl: String(rec.imageUrl || "").trim(),
+    browser: String(rec.browser || "").trim(),
+    openedCount: 0,
+    lastOpenedAt: 0,
+    addedAt: now,
+    pinned: false,
+  });
+  schedule("recreations", persistRecreations);
+  emit("recreations");
+  return id;
+}
+
+export async function updateRecreation(id, patch) {
+  const r = state.recreations.find(x => x.id === id);
+  if (!r) return;
+  Object.assign(r, patch);
+  schedule("recreations", persistRecreations);
+  emit("recreations");
+}
+
+export async function deleteRecreation(id) {
+  state.recreations = state.recreations.filter(x => x.id !== id);
+  schedule("recreations", persistRecreations);
+  emit("recreations");
+}
+
+export async function bumpRecreationOpened(id) {
+  const r = state.recreations.find(x => x.id === id);
+  if (!r) return;
+  r.openedCount = (r.openedCount || 0) + 1;
+  r.lastOpenedAt = Date.now();
+  schedule("recreations", persistRecreations);
+  emit("recreations");
+}
+
+// Open a recreation URL — per-site browser takes precedence over the global setting.
+export async function openRecreation(rec) {
+  const browser = (rec.browser && rec.browser.trim()) || state.settings.recreationBrowser || "";
+  try {
+    if (browser) await invoke("open_url_with", { url: rec.url, app: browser });
+    else await invoke("open_url", { url: rec.url });
+  } catch (e) { console.warn("open recreation failed", e); }
+  await bumpRecreationOpened(rec.id);
+}
+
+// Fetch og:image + og:title for a URL via the Rust proxy. Returns {image_url, title, final_url}.
+export async function fetchUrlPreview(url) {
+  try {
+    const raw = await invoke("fetch_url_preview", { url });
+    const parsed = JSON.parse(raw);
+    return {
+      imageUrl: String(parsed.image_url || ""),
+      title: String(parsed.title || ""),
+      finalUrl: String(parsed.final_url || url),
+    };
+  } catch (e) {
+    console.warn("fetch_url_preview failed", e);
+    return { imageUrl: "", title: "", finalUrl: url };
+  }
+}
+
 async function persistSolutions() {
   await writeFile("solutions.json", JSON.stringify(state.solutions, null, 2));
 }
@@ -1268,6 +1355,7 @@ window.__GAIN__ = {
   state, getSettings, getSheet, getSheets, getWallet, getDayLog,
   updateSettings, updateWallet, updateDayLog, updateSheetRow,
   addSheet, removeSheet, callGrok, serpSearch, youtubeSearch, secure, boot,
+  getRecreations, addRecreation, updateRecreation, deleteRecreation, bumpRecreationOpened, openRecreation, fetchUrlPreview,
   getMotivations, getMotivationCounts, addMotivations, clearUserMotivations,
   getShopQuotes, getShopQuoteCounts, getShopQuote, addShopQuotes, clearUserShopQuotes,
   getRewards, addReward, updateReward, removeReward,
