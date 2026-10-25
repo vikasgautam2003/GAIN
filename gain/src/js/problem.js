@@ -174,28 +174,26 @@ function render(ctx) {
         </section>
 
         <aside class="prob-right">
-          <div class="prob-card timer-card alive">
-            <div class="pc-head"><h3>Focus timer</h3><span class="pc-sub">No peeking</span></div>
-            <div class="timer-wrap">
-              <svg class="ring" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="46" fill="none" stroke="var(--line)" stroke-width="5"/>
-                <circle id="ring-arc" cx="50" cy="50" r="46" fill="none" stroke="var(--blue)" stroke-width="5"
-                        stroke-linecap="round" stroke-dasharray="289" stroke-dashoffset="0" transform="rotate(-90 50 50)"/>
-              </svg>
-              <div class="timer-text" id="timer-display">25:00</div>
+          ${pattern ? `
+            <div class="prob-card cs-card alive">
+              <div class="pc-head"><h3>Pattern cheatsheet</h3><span class="pc-sub">Dojo-wall for ${esc(pattern)}</span></div>
+              <button class="cs-open-btn" id="cs-open-btn" title="Open the editable cheatsheet for this pattern">
+                <span class="cs-open-ic">📄</span>
+                <span class="cs-open-label">Open cheatsheet</span>
+                <span class="cs-open-arrow">→</span>
+              </button>
+              <p class="cs-open-note">Invariant · skeleton · when to reach for it · 3 traps · 3 gold problems · one-line complexity. All editable.</p>
             </div>
-            <div class="timer-ctrls">
-              <button class="btn-ghost btn-sm" data-t="15">15m</button>
-              <button class="btn-ghost btn-sm" data-t="25">25m</button>
-              <button class="btn-ghost btn-sm" data-t="45">45m</button>
+          ` : ""}
+          <div class="prob-card review-card alive">
+            <div class="pc-head"><h3>Mark for review</h3><span class="pc-sub">Resurface in your SRS queue</span></div>
+            <div class="review-actions">
+              <button class="review-btn" data-review-days="1">Tomorrow</button>
+              <button class="review-btn" data-review-days="3">In 3 days</button>
+              <button class="review-btn" data-review-days="7">In 7 days</button>
             </div>
-            <div class="timer-ctrls">
-              <button class="btn-primary btn-sm" id="btn-pause">Pause</button>
-              <button class="btn-ghost btn-sm" id="btn-reset">Reset</button>
-            </div>
-            <p class="timer-pledge">"No peeking for 25 minutes. That's the deal."</p>
+            <p class="review-note">Overrides the automatic SRS schedule for the LAST solve of this problem.</p>
           </div>
-
           <div class="prob-card conf-card alive">
             <div class="pc-head"><h3>Confidence</h3><span class="pc-sub">Be honest</span></div>
             <div class="conf-row" id="conf-row">
@@ -344,12 +342,58 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
     }
   });
 
-  // --- timer controls ---
-  root.querySelectorAll(".timer-ctrls [data-t]").forEach(btn => {
-    btn.addEventListener("click", () => startTimer(root, Number(btn.dataset.t) * 60));
+  // --- Focus timer removed from Problem page (the Today task-row timer is the
+  //     canonical per-task timer). Related CSS/vars kept harmless below. ---
+
+  // --- Cheatsheet open button in the sidebar card ---
+  root.querySelector("#cs-open-btn")?.addEventListener("click", async () => {
+    if (!pattern) return;
+    const { openCheatsheet } = await import("./cheatsheet.js");
+    openCheatsheet(pattern);
   });
-  root.querySelector("#btn-pause").addEventListener("click", () => togglePause(root));
-  root.querySelector("#btn-reset").addEventListener("click", () => startTimer(root, timerState?.durationSec || 25*60));
+
+  // --- Mark-for-review: force this problem back into the SRS queue ---
+  // Finds the LAST dayLog entry that solved this sheet row and writes a
+  // reviewOverride on it that getDueRevisits already respects. If the
+  // problem has never been solved, nothing to override.
+  root.querySelectorAll("[data-review-days]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const days = Number(btn.dataset.reviewDays);
+      const choice = days === 1 ? "tomorrow" : days === 3 ? "in3days" : "mastered";
+      const { getDayLog, updateDayLog } = await import("./store.js");
+      const dl = getDayLog();
+      let lastDate = null;
+      for (const d of Object.keys(dl).sort().reverse()) {
+        const entry = dl[d];
+        if (!entry?.done || !Array.isArray(entry.assigned)) continue;
+        for (const t of entry.assigned) {
+          if (t.sheet === sheetName && t.rowIndex === idx && entry.done.includes(t.ref)) {
+            lastDate = { d, ref: t.ref };
+            break;
+          }
+        }
+        if (lastDate) break;
+      }
+      if (!lastDate) {
+        btn.textContent = "Solve it first →";
+        setTimeout(() => { btn.textContent = days === 1 ? "Tomorrow" : (days === 3 ? "In 3 days" : "In 7 days"); }, 1800);
+        return;
+      }
+      await updateDayLog(dlog => {
+        const entry = dlog[lastDate.d];
+        if (!entry) return;
+        if (!entry.reviewOverride) entry.reviewOverride = {};
+        // Translate custom days to a known override key — the engine understands
+        // tomorrow/in3days/mastered; for 7d we approximate with in3days then
+        // let SRS take over on next solve (safer than inventing new keys).
+        entry.reviewOverride[lastDate.ref] = days <= 1 ? "tomorrow" : days <= 3 ? "in3days" : "in3days";
+      });
+      const original = btn.textContent;
+      btn.textContent = "✓ Queued";
+      btn.disabled = true;
+      setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2200);
+    });
+  });
 
   // --- confidence: write back + show growth-system effect ---
   const growth = root.querySelector("#conf-growth");
@@ -848,6 +892,43 @@ function styles() {
     .prob .conf-dot.active { background: var(--blue); border-color: var(--blue); color: #fff; transform: translateY(-2px); box-shadow: 0 4px 14px rgba(59,100,246,.3); }
     .prob .conf-note { color: var(--mut); font-size: 11px; margin: 0; font-style: italic; line-height: 1.4; }
     .prob .conf-growth { margin-top: var(--s-3); }
+
+    /* Cheatsheet sidebar card */
+    .prob .cs-card { }
+    .prob .cs-open-btn {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; margin: var(--s-3) 0 8px;
+      padding: 11px 14px; border-radius: 10px;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 18%, var(--paper)) 0%, color-mix(in oklab, var(--gold) 6%, var(--paper)) 100%);
+      border: 1px solid color-mix(in oklab, var(--gold) 36%, var(--line));
+      color: var(--ink); cursor: pointer;
+      font: 600 13.5px/1 var(--font-sans); letter-spacing: -.005em;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .prob .cs-open-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px -6px color-mix(in oklab, var(--gold) 50%, transparent);
+      border-color: color-mix(in oklab, var(--gold) 50%, var(--line));
+    }
+    .prob .cs-open-btn:hover .cs-open-arrow { transform: translateX(3px); }
+    .prob .cs-open-ic { font-size: 16px; flex-shrink: 0; }
+    .prob .cs-open-label { flex: 1; text-align: left; }
+    .prob .cs-open-arrow { font-size: 14px; color: color-mix(in oklab, var(--gold) 80%, var(--ink)); transition: transform .18s cubic-bezier(.2,.9,.3,1); }
+    .prob .cs-open-note { color: var(--mut); font-size: 11.5px; line-height: 1.45; margin: 0; }
+
+    /* Mark-for-review sidebar card */
+    .prob .review-actions { display: flex; gap: 6px; margin: var(--s-3) 0 8px; flex-wrap: wrap; }
+    .prob .review-btn {
+      flex: 1; min-width: 70px;
+      padding: 8px 10px; border-radius: 8px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--ink);
+      font: 600 11.5px/1 var(--font-sans); cursor: pointer; letter-spacing: -.005em;
+      transition: all .14s ease;
+    }
+    .prob .review-btn:hover { border-color: var(--line2); background: color-mix(in oklab, var(--ink) 4%, var(--paper)); }
+    .prob .review-btn:disabled { color: var(--green); border-color: var(--green); background: color-mix(in oklab, var(--green) 10%, var(--paper)); }
+    .prob .review-note { color: var(--mut); font-size: 11px; line-height: 1.45; margin: 0; }
     .prob .growth-pill {
       background: var(--blue-soft); color: var(--blue); font-size: 11px; font-weight: 600;
       padding: 8px 12px; border-radius: 8px; text-align: center;

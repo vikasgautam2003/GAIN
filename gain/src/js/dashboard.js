@@ -120,6 +120,19 @@ function render() {
           <div class="mastery-tile-body" id="mastery-tile-body"></div>
         </a>
 
+        <div class="dash-card dash-card-focus" id="focus-tile" title="Pattern of the week — Suggest + Warmup bias toward this pattern for 7 days">
+          <div class="dash-card-head">
+            <h3>Pattern of the week</h3>
+            <small id="focus-tile-sub">—</small>
+          </div>
+          <div class="focus-tile-body">
+            <div class="focus-tile-name" id="focus-tile-name">—</div>
+            <div class="focus-tile-actions">
+              <button class="focus-tile-btn" id="focus-tile-change" title="Pick a different pattern for this week">Change</button>
+            </div>
+          </div>
+        </div>
+
         <div class="dash-card dash-card-explainback" id="explainback-tile" role="button" tabindex="0" hidden title="Weekly recall drill — explain a problem you solved 3-6 weeks ago, Groq grades you">
           <div class="dash-card-head">
             <h3>Explain-back · due</h3>
@@ -177,6 +190,7 @@ function paint(root) {
 
   // ---- Pattern mastery mini-grid tile ----
   paintMasteryTile(root);
+  paintFocusTile(root);
   // ---- Explain-back drill tile (only when due) ----
   paintExplainBackTile(root);
 
@@ -416,6 +430,35 @@ function paintExplainBackTile(root) {
   }).catch(() => { tile.hidden = true; });
 }
 
+async function paintFocusTile(root) {
+  try {
+    const { getCurrentFocus, listFocusPatterns, setFocusOverride } = await import("./weeklyFocus.js");
+    const current = await getCurrentFocus();
+    const sub = root.querySelector("#focus-tile-sub");
+    const nameEl = root.querySelector("#focus-tile-name");
+    const changeBtn = root.querySelector("#focus-tile-change");
+    if (!current) {
+      if (nameEl) nameEl.textContent = "No pattern set";
+      if (sub) sub.textContent = "Add patterns in Settings";
+      return;
+    }
+    if (nameEl) nameEl.textContent = current;
+    if (sub) sub.textContent = "Suggest + Warmup bias toward this for 7 days";
+    changeBtn?.addEventListener("click", () => {
+      const list = listFocusPatterns();
+      if (!list.length) { alert("Add patterns in Settings → Schedule → Pattern of the week."); return; }
+      const choice = prompt("Pick this week's focus pattern:\n\n" + list.map((p, i) => `${i+1}. ${p}`).join("\n") + "\n\nType a number or the exact pattern name:", current);
+      if (!choice) return;
+      const idx = parseInt(choice, 10);
+      const pick = Number.isInteger(idx) && idx >= 1 && idx <= list.length ? list[idx - 1] : choice.trim();
+      if (!pick) return;
+      setFocusOverride(pick).then(() => paintFocusTile(root));
+    });
+  } catch (e) {
+    console.warn("[focus tile] failed", e);
+  }
+}
+
 function paintMasteryTile(root) {
   const tile = root.querySelector("#mastery-tile");
   if (!tile) return;
@@ -562,6 +605,25 @@ function styles() {
     .dash-card-mentor:hover .mentor-tile-arrow { color: var(--gold); transform: translateX(4px); }
     .dash-card-mastery   { grid-column: 1; grid-row: 4; text-decoration: none; cursor: pointer; transition: all .18s; }
     .dash-card-mastery:hover { border-color: var(--gold); transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
+
+    /* Pattern-of-the-week tile */
+    .dash-card-focus { grid-column: 2; grid-row: 4; transition: all .18s; }
+    .dash-card-focus:hover { border-color: var(--gold); transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
+    .focus-tile-body { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+    .focus-tile-name {
+      font: 700 20px/1.2 var(--font-sans); color: var(--ink); letter-spacing: -.018em;
+      padding: 10px 12px;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 14%, var(--paper)) 0%, color-mix(in oklab, var(--gold) 4%, var(--paper)) 100%);
+      border: 1px solid color-mix(in oklab, var(--gold) 32%, var(--line));
+      border-radius: 10px;
+    }
+    .focus-tile-actions { display: flex; gap: 6px; }
+    .focus-tile-btn {
+      padding: 6px 12px; border-radius: 8px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--mut);
+      font: 600 11px/1 var(--font-sans); cursor: pointer;
+    }
+    .focus-tile-btn:hover { color: var(--ink); border-color: var(--line2); }
     .dash-card-explainback { grid-column: 2 / 4; grid-row: 4; cursor: pointer; transition: all .18s; }
     .dash-card-explainback[hidden] { display: none; }
     .dash-card-explainback:hover { border-color: var(--blue, #3870ff); transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }

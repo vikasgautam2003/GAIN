@@ -338,10 +338,20 @@ export function getReviewOverride(dateKey, ref) {
   return day?.reviewOverride?.[ref];
 }
 
-// --- Spaced-repetition queue ---------------------------------------------
-// Interval schedule — lower confidence returns sooner. Confidence 4/5 skips.
-// Returns the base-interval (days) for FIRST revisit after a solve.
-const REVISIT_INTERVAL_DAYS = { 1: 1, 2: 3, 3: 7, 4: -1, 5: -1 };
+// --- Spaced-repetition queue (SRS) ---------------------------------------
+// Interval base for the FIRST revisit after a solve, keyed on confidence (★).
+// Previously ★4/5 meant "never revisit" (-1) — that was a graduation bug: a
+// problem you aced in April was gone from your map forever. True SRS keeps
+// ★4/5 on the ladder with LONGER intervals (14d / 30d) so nothing truly
+// falls off. On subsequent re-solves, each pass multiplies by STEP_MULT so
+// a well-rehearsed problem spaces out:
+//   solve 1: base * 1
+//   solve 2: base * STEP_MULT
+//   solve 3: base * STEP_MULT^2
+// up to MAX_INTERVAL_DAYS so the ladder doesn't run away.
+const REVISIT_INTERVAL_DAYS = { 1: 1, 2: 3, 3: 7, 4: 14, 5: 30 };
+const SRS_STEP_MULT = 1.6;
+const SRS_MAX_INTERVAL_DAYS = 180;
 
 // Explicit review override — the user can override spaced-rep by clicking a
 // chip after rating ("Tomorrow" / "In 3 days" / "Never — mastered"). Default
@@ -365,6 +375,21 @@ export function getDueRevisits(dateKey) {
   if (!target) return [];
   const dates = Object.keys(dayLog).sort().reverse();  // newest first
 
+  // Pass 0 — walk ALL past solves to build a solve-count per sheet row.
+  // SRS lengthens the interval the more times you've successfully re-solved.
+  const solveCount = new Map();  // sheetKey → total solves (any ★)
+  for (const d of dates) {
+    if (d >= dateKey) continue;
+    const entry = dayLog[d];
+    if (!entry || !Array.isArray(entry.assigned) || !Array.isArray(entry.done)) continue;
+    for (const task of entry.assigned) {
+      if (!task.sheet || task.rowIndex == null) continue;
+      if (!entry.done.includes(task.ref)) continue;
+      const k = `${task.sheet}#${task.rowIndex}`;
+      solveCount.set(k, (solveCount.get(k) || 0) + 1);
+    }
+  }
+
   // Pass 1 — collect ALL most-recent-solve records per sheet row (for scoring + fallback).
   const latestSolve = new Map();  // sheetKey → { task, date, conf, dueOn }
   for (const d of dates) {
@@ -378,9 +403,16 @@ export function getDueRevisits(dateKey) {
       if (latestSolve.has(key)) continue;  // already saw a newer solve
       const conf = entry.confidence?.[task.ref] ?? 3;
       const override = entry.reviewOverride?.[task.ref];
-      const base = (override && REVIEW_OVERRIDE_DAYS[override] !== undefined)
-        ? REVIEW_OVERRIDE_DAYS[override]
-        : REVISIT_INTERVAL_DAYS[conf];
+      // Explicit override wins (user bumped it manually)
+      let base;
+      if (override && REVIEW_OVERRIDE_DAYS[override] !== undefined) {
+        base = REVIEW_OVERRIDE_DAYS[override];
+      } else {
+        // SRS: base interval for this ★, scaled by solve count.
+        const baseStep = REVISIT_INTERVAL_DAYS[conf];
+        const passes = Math.max(0, (solveCount.get(key) || 1) - 1);
+        base = baseStep > 0 ? Math.min(SRS_MAX_INTERVAL_DAYS, Math.round(baseStep * Math.pow(SRS_STEP_MULT, passes))) : baseStep;
+      }
       let dueOn = null;
       if (base && base > 0) {
         dueOn = parseKey(d);
@@ -401,8 +433,15 @@ export function getDueRevisits(dateKey) {
   // Rank "actually due" by lowest confidence then oldest solve (urgent first).
   dueNow.sort((a, b) => a.conf - b.conf || a.date.localeCompare(b.date));
 
-  // Cap at 3 revisits/day so the plan doesn't bloat.
-  let picks = dueNow.slice(0, 3);
+  // Cap daily revisits. The new SRS layer uses a percentage of the daily plan
+  // size (default 40%) so new study always has slots. Falls back to a hard
+  // minimum of 3 if the user hasn't tuned the setting.
+  const settings = getSettings();
+  const schedule = settings?.schedule || {};
+  const pct = typeof schedule.revisitCapPct === "number" ? schedule.revisitCapPct : 40;
+  const dailySize = Math.max(3, (schedule.newDsaPerWeekday || 1) + (schedule.sdPerWeek || 0) + (schedule.intPerWeek || 0) + 2);
+  const dynamicCap = Math.max(1, Math.round(dailySize * (pct / 100)));
+  let picks = dueNow.slice(0, dynamicCap);
 
   // GUARANTEE: if nothing's due, promote one fallback — the weakest-conf
   // (or oldest-solved) row the user has already done. If the user has never

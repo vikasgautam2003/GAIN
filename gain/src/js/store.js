@@ -73,7 +73,23 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
     sdIntDays: ["Mon", "Thu"],
     weekendMode: "retries+casestudy",
     srIntervals: [7, 30],
-    maxTasksPerDay: 5    // hard cap — no overloading, no ripping yourself off
+    maxTasksPerDay: 5,    // hard cap — no overloading, no ripping yourself off
+    revisitCapPct: 40,    // SRS: max % of daily plan reserved for due revisits (0 disables; higher = more review-heavy)
+    weeklyFocus: {
+      // Curated list of indispensable patterns the app rotates through week-by-week.
+      // Fully user-editable from Settings. On Monday the engine picks the next entry
+      // (or an override you set via the Dashboard tile) and biases Suggest + Warmup
+      // toward it for 7 days.
+      patterns: [
+        "Graphs", "Dynamic Programming", "Trees", "Sliding Window", "Binary Search",
+        "Two Pointers", "Heap / Priority Queue", "Backtracking",
+        "System Design: Caching", "System Design: Load Balancing",
+        "OS: Sync primitives", "Networking: DNS"
+      ],
+      current: "",          // explicit override — if empty, derive from rotationIdx
+      rotationIdx: 0,       // next-in-rotation index
+      startedAt: null       // Monday timestamp of current focus week
+    }
   },
   wallet: {
     taskMin: 20, taskMax: 100,
@@ -234,6 +250,18 @@ export async function boot() {
     const have = new Set((state.settings.sheets || []).map(x => x.name));
     for (const def of DEFAULT_SETTINGS.sheets) {
       if (!have.has(def.name)) state.settings.sheets.push({ ...def });
+    }
+    // Migration: deep-merge nested settings objects so new default fields
+    // (revisitCapPct, weeklyFocus, …) land for existing users without wiping
+    // their persisted overrides.
+    state.settings.schedule = { ...DEFAULT_SETTINGS.schedule, ...(state.settings.schedule || {}) };
+    if (state.settings.schedule.weeklyFocus == null) {
+      state.settings.schedule.weeklyFocus = { ...DEFAULT_SETTINGS.schedule.weeklyFocus };
+    } else {
+      state.settings.schedule.weeklyFocus = {
+        ...DEFAULT_SETTINGS.schedule.weeklyFocus,
+        ...state.settings.schedule.weeklyFocus,
+      };
     }
     // Migration: ensure every default tier unlock threshold is present (adds 'mega' for old settings).
     state.settings.wallet.tierUnlocks = {

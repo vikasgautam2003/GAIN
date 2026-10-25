@@ -355,9 +355,18 @@ function paintPlan(root) {
     }
     const chips = chipsFor(t);
     const companyChips = companyChipsFor(t);
+    const isInProgress = Boolean(day.inProgress && day.inProgress[t.ref] && !done);
+    const inProgressBar = isInProgress ? `
+      <div class="in-progress-bar">
+        <span class="in-progress-tag">⚡ IN&nbsp;PROGRESS</span>
+        ${t.sheet && t.rowIndex != null ? `<button class="ip-btn ip-btn-learn" data-ip-learn="${esc(t.ref)}" title="Open the full Groq lesson">✦ Learn</button>` : ""}
+        <button class="ip-btn ip-btn-stuck" data-ip-stuck="${esc(t.ref)}" title="Get a rich hint — costs 10% of the bounty">🆘 I'm Stuck</button>
+        <span class="ip-spacer"></span>
+      </div>
+    ` : "";
     return `
-      <div class="task-row ${done ? "done" : ""} ${needsRating ? "capture" : ""} ${isRevisit ? "revisit" : ""}" data-ref="${esc(t.ref)}">
-        <button class="checkbox ${done ? "done" : ""}" data-ref="${esc(t.ref)}" aria-label="Toggle ${esc(t.title)}"></button>
+      <div class="task-row ${done ? "done" : ""} ${isInProgress ? "in-progress" : ""} ${needsRating ? "capture" : ""} ${isRevisit ? "revisit" : ""}" data-ref="${esc(t.ref)}">
+        <button class="checkbox ${done ? "done" : ""}" data-ref="${esc(t.ref)}" aria-label="Status for ${esc(t.title)}"></button>
         <div class="task-main">
           <div class="task-title-row">
             <div class="task-title">${kindPill}${kindPill ? " " : ""}${esc(t.title)}</div>
@@ -365,6 +374,7 @@ function paintPlan(root) {
             ${chips ? `<div class="hover-chips">${chips}</div>` : ""}
           </div>
           <div class="task-meta">${esc(subFor(t))}</div>
+          ${inProgressBar}
           ${needsRating ? `
             <div class="confidence-prompt" data-rate-ref="${esc(t.ref)}">
               <span class="cp-label">How'd it go?</span>
@@ -537,6 +547,30 @@ function paintPlan(root) {
       e.preventDefault();
       e.stopPropagation();
       await handleTick(btn, root);
+    });
+  });
+
+  // --- In-progress action buttons: Learn + I'm Stuck ---
+  rowsEl.querySelectorAll("[data-ip-learn]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const ref = btn.dataset.ipLearn;
+      const d = getDayLog()[currentKey()];
+      const task = d?.assigned?.find(t => t.ref === ref);
+      if (!task || !task.sheet || task.rowIndex == null) return;
+      const { openLessonModal } = await import("./lesson.js");
+      openLessonModal({ sheetName: task.sheet, rowIndex: task.rowIndex });
+    });
+  });
+  rowsEl.querySelectorAll("[data-ip-stuck]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const ref = btn.dataset.ipStuck;
+      const dateKey = currentKey();
+      const task = getDayLog()[dateKey]?.assigned?.find(t => t.ref === ref);
+      if (!task) return;
+      const { openStuckHint } = await import("./stuck.js");
+      openStuckHint({ task, dateKey, onConfirm: () => paintPlan(root) });
     });
   });
 
@@ -1251,6 +1285,10 @@ function fireMicroConfetti(anchor) {
   }
 }
 
+// Open the three-state status popover anchored to the checkbox.
+// Options: Pending (not started) · In-progress (auto-starts timer) · Complete.
+// Prevents accidental completion from a stray click, and surfaces the
+// in-progress state so Learn + I'm Stuck can appear on the row.
 async function handleTick(btn, root) {
   const ref = btn.dataset.ref;
   const dateKey = currentKey();
@@ -1258,15 +1296,246 @@ async function handleTick(btn, root) {
   if (!day) { console.warn("[today] no day log"); return; }
   const task = day.assigned.find(t => t.ref === ref);
   if (!task) { console.warn("[today] no task for ref", ref); return; }
-  const wasDone = day.done.includes(ref);
-  if (wasDone) {
-    await untickTask(dateKey, ref);
-    await updateWallet(w => {
-      w.earned = Math.max(0, w.earned - task.value);
-      w.ledger.push({ date: new Date().toISOString(), type: "untick", amount: -task.value, label: task.title });
+  openStatusPopover(btn, task, dateKey, root);
+}
+
+function currentStatus(day, ref) {
+  if (day.done.includes(ref)) return "complete";
+  if (day.inProgress && day.inProgress[ref]) return "in-progress";
+  return "pending";
+}
+
+function openStatusPopover(anchorBtn, task, dateKey, root) {
+  // Clean any existing popover
+  document.querySelectorAll(".ts-pop").forEach(p => p.remove());
+
+  const day = getDayLog()[dateKey];
+  const current = currentStatus(day, task.ref);
+
+  const pop = document.createElement("div");
+  pop.className = "ts-pop";
+  pop.innerHTML = `
+    <div class="ts-pop-arrow"></div>
+    <div class="ts-pop-head">Status</div>
+    <button class="ts-pop-opt ${current === "pending" ? "current" : ""}" data-status="pending">
+      <span class="ts-pop-dot ts-pop-dot-pending"></span>
+      <span class="ts-pop-label">
+        <span class="ts-pop-name">Pending</span>
+        <span class="ts-pop-desc">Not yet started</span>
+      </span>
+      ${current === "pending" ? `<span class="ts-pop-check">✓</span>` : ""}
+    </button>
+    <button class="ts-pop-opt ${current === "in-progress" ? "current" : ""}" data-status="in-progress">
+      <span class="ts-pop-dot ts-pop-dot-inprog"></span>
+      <span class="ts-pop-label">
+        <span class="ts-pop-name">In-progress</span>
+        <span class="ts-pop-desc">Starts the timer · unlocks hints</span>
+      </span>
+      ${current === "in-progress" ? `<span class="ts-pop-check">✓</span>` : ""}
+    </button>
+    <button class="ts-pop-opt ${current === "complete" ? "current" : ""}" data-status="complete">
+      <span class="ts-pop-dot ts-pop-dot-done"></span>
+      <span class="ts-pop-label">
+        <span class="ts-pop-name">Complete</span>
+        <span class="ts-pop-desc">Bank the bounty</span>
+      </span>
+      ${current === "complete" ? `<span class="ts-pop-check">✓</span>` : ""}
+    </button>
+  `;
+  document.body.appendChild(pop);
+
+  injectStatusPopStyles();
+
+  // Position anchored to the checkbox. Flip horizontally if would overflow.
+  const r = anchorBtn.getBoundingClientRect();
+  const popW = 240;
+  const popH = 200;
+  let left = r.right + 10;
+  let top = r.top - 8;
+  if (left + popW > window.innerWidth - 16) left = r.left - popW - 10;
+  if (left < 10) left = Math.max(10, r.left);
+  if (top + popH > window.innerHeight - 16) top = Math.max(10, window.innerHeight - popH - 16);
+  if (top < 10) top = 10;
+  pop.style.left = left + "px";
+  pop.style.top = top + "px";
+
+  const close = () => {
+    pop.remove();
+    document.removeEventListener("click", onDocClick, true);
+    document.removeEventListener("keydown", onKey);
+  };
+  const onDocClick = (e) => { if (!pop.contains(e.target) && e.target !== anchorBtn) close(); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  // Defer so the originating checkbox click doesn't immediately close
+  setTimeout(() => {
+    document.addEventListener("click", onDocClick, true);
+    document.addEventListener("keydown", onKey);
+  }, 0);
+
+  pop.querySelectorAll(".ts-pop-opt").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const next = btn.dataset.status;
+      close();
+      await applyStatus(task, dateKey, current, next, anchorBtn, root);
     });
-    await syncSheetOnUntick(task);
-  } else {
+  });
+}
+
+async function applyStatus(task, dateKey, prev, next, btn, root) {
+  if (prev === next) return;
+  const { updateDayLog } = await import("./store.js");
+
+  if (next === "pending") {
+    // Clear in-progress and uncomplete if was done
+    if (prev === "complete") await untickCompleteFlow(task, dateKey);
+    await updateDayLog(dl => {
+      const d = dl[dateKey];
+      if (!d) return;
+      if (d.inProgress) delete d.inProgress[task.ref];
+      // Pause any running timer
+      if (d.timeOnTask?.[task.ref]?.startedAt) {
+        const slot = d.timeOnTask[task.ref];
+        slot.sec = slot.sec + Math.floor((Date.now() - slot.startedAt) / 1000);
+        slot.startedAt = null;
+      }
+    });
+    return;
+  }
+
+  if (next === "in-progress") {
+    if (prev === "complete") await untickCompleteFlow(task, dateKey);
+    await updateDayLog(dl => {
+      const d = dl[dateKey];
+      if (!d) return;
+      if (!d.inProgress) d.inProgress = {};
+      d.inProgress[task.ref] = true;
+      // Auto-start timer (reuse existing timeOnTask shape)
+      if (!d.timeOnTask) d.timeOnTask = {};
+      if (!d.timeOnTask[task.ref]) d.timeOnTask[task.ref] = { sec: 0, startedAt: null };
+      const slot = d.timeOnTask[task.ref];
+      if (!slot.startedAt) slot.startedAt = Date.now();
+    });
+    return;
+  }
+
+  if (next === "complete") {
+    await completeTaskFlow(task, dateKey, btn, root);
+    await updateDayLog(dl => {
+      const d = dl[dateKey];
+      if (d?.inProgress) delete d.inProgress[task.ref];
+    });
+  }
+}
+
+function injectStatusPopStyles() {
+  if (document.getElementById("ts-pop-styles")) return;
+  const s = document.createElement("style");
+  s.id = "ts-pop-styles";
+  s.textContent = `
+    .ts-pop {
+      position: fixed; z-index: 1800;
+      width: 240px; padding: 6px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+      box-shadow:
+        0 16px 40px -8px rgba(0,0,0,.18),
+        0 4px 10px rgba(0,0,0,.08);
+      animation: tsPopIn .16s cubic-bezier(.2,1.2,.3,1) both;
+    }
+    @keyframes tsPopIn { from { opacity: 0; transform: translateY(-4px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .ts-pop-arrow {
+      position: absolute; left: -5px; top: 14px;
+      width: 10px; height: 10px; background: var(--paper);
+      border-left: 1px solid var(--line); border-bottom: 1px solid var(--line);
+      transform: rotate(45deg);
+    }
+    .ts-pop-head {
+      font: 700 10px/1 var(--font-sans); letter-spacing: .18em; text-transform: uppercase;
+      color: var(--mut); padding: 8px 10px 6px;
+    }
+    .ts-pop-opt {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 9px 10px; border-radius: 8px; border: none; background: transparent;
+      cursor: pointer; text-align: left;
+      transition: background .12s ease;
+    }
+    .ts-pop-opt:hover { background: color-mix(in oklab, var(--ink) 4%, var(--paper)); }
+    .ts-pop-opt.current { background: color-mix(in oklab, var(--ink) 6%, var(--paper)); }
+    .ts-pop-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+      border: 2px solid var(--line);
+    }
+    .ts-pop-dot-pending { background: transparent; }
+    .ts-pop-dot-inprog { background: var(--gold); border-color: var(--gold); }
+    .ts-pop-dot-done { background: var(--green); border-color: var(--green); }
+    .ts-pop-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+    .ts-pop-name { font: 600 13px/1.2 var(--font-sans); color: var(--ink); letter-spacing: -.005em; }
+    .ts-pop-desc { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .01em; }
+    .ts-pop-check {
+      font: 700 13px/1 var(--font-sans); color: var(--green);
+      padding: 0 4px;
+    }
+
+    /* In-progress task row — surfaces Learn + I'm Stuck */
+    .today .task-row.in-progress {
+      background: color-mix(in oklab, var(--gold) 5%, var(--paper));
+      border-color: color-mix(in oklab, var(--gold) 24%, var(--line));
+      box-shadow: 0 2px 6px -2px color-mix(in oklab, var(--gold) 30%, transparent);
+    }
+    .today .task-row.in-progress .checkbox {
+      background: var(--gold); border-color: var(--gold);
+    }
+    .today .task-row.in-progress .checkbox::before {
+      content: ""; position: absolute; inset: 25%; border-radius: 50%; background: var(--paper);
+    }
+    .today .in-progress-bar {
+      display: flex; align-items: center; gap: 10px;
+      margin-top: 10px; padding: 10px 12px;
+      background: color-mix(in oklab, var(--gold) 8%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--gold) 28%, var(--line));
+      border-radius: 10px;
+    }
+    .today .in-progress-tag {
+      font: 800 9.5px/1 var(--font-sans); letter-spacing: .18em; text-transform: uppercase;
+      color: var(--gold); flex-shrink: 0;
+      padding: 4px 7px; border-radius: 5px;
+      background: color-mix(in oklab, var(--gold) 14%, var(--paper));
+    }
+    .today .ip-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 12px; border-radius: 8px;
+      font: 600 12px/1 var(--font-sans); cursor: pointer; letter-spacing: -.005em;
+      transition: all .14s ease;
+    }
+    .today .ip-btn-learn {
+      background: var(--paper); color: var(--ink); border: 1px solid var(--line);
+    }
+    .today .ip-btn-learn:hover { border-color: var(--ink); }
+    .today .ip-btn-stuck {
+      background: var(--red); color: #fff; border: 1px solid var(--red);
+    }
+    .today .ip-btn-stuck:hover { filter: brightness(1.08); }
+    .today .ip-spacer { flex: 1; }
+    .today .ip-timer { font: 600 11.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .02em; }
+  `;
+  document.head.appendChild(s);
+}
+
+async function untickCompleteFlow(task, dateKey) {
+  const ref = task.ref;
+  await untickTask(dateKey, ref);
+  await updateWallet(w => {
+    w.earned = Math.max(0, w.earned - task.value);
+    w.ledger.push({ date: new Date().toISOString(), type: "untick", amount: -task.value, label: task.title });
+  });
+  await syncSheetOnUntick(task);
+}
+
+async function completeTaskFlow(task, dateKey, btn, root) {
+  const ref = task.ref;
+  const day = getDayLog()[dateKey];
+  if (!day || day.done.includes(ref)) return;
+  {
     // Auto-pause the session timer if it was running — fold elapsed into sec
     const { updateDayLog } = await import("./store.js");
     await updateDayLog(dl => {

@@ -461,13 +461,17 @@ function buildCandidatePool(sheet, difficulty, context, sheetName) {
     });
   }
 
-  // Rank: weakest-pattern > weekly-theme > HIGH-freq > arbitrary
+  // Rank: pattern-of-the-week (if set) > weakest-pattern > weekly-theme > HIGH-freq
   const theme = context.theme ? context.theme.toLowerCase() : "";
   const weakest = context.weakest ? context.weakest.toLowerCase() : "";
+  const focusPattern = context.focusPattern ? String(context.focusPattern).toLowerCase() : "";
   rows.sort((a, b) => {
     const score = (r) => {
       let s = 0;
       const p = (r.pattern || "").toLowerCase();
+      // Pattern-of-the-week gets the biggest boost — one week of focus beats
+      // seven days of scatter. Falls back cleanly if no focus is set.
+      if (focusPattern && p.includes(focusPattern.split(" ")[0])) s += 150;
       if (weakest && p.includes(weakest.split(" ")[0])) s += 100;
       if (theme && p.includes(theme.split(" ")[0])) s += 50;
       if (/^high$/i.test(r.freq)) s += 10;
@@ -503,6 +507,16 @@ function computeContext() {
   const today = dayLog[todayKey()];
   const theme = today?.weeklyPlan?.theme || today?.weeklyPlan?.title || null;
 
+  // Pattern-of-the-week — read from settings (loaded synchronously, cached).
+  let focusPattern = null;
+  try {
+    const s = getSettings();
+    const wf = s?.schedule?.weeklyFocus;
+    if (wf) {
+      focusPattern = wf.current || (wf.patterns?.[wf.rotationIdx % Math.max(1, wf.patterns.length)] || null);
+    }
+  } catch (_) {}
+
   // Weakest pattern: lowest avg confidence across last 10 solves per pattern
   const timeline = {};
   for (const d of Object.keys(dayLog).sort()) {
@@ -526,7 +540,7 @@ function computeContext() {
   // Only surface if avg confidence ≤ 2.8 — otherwise user isn't actually weak there.
   if (lowestAvg > 2.8) weakest = null;
 
-  return { theme, weakest };
+  return { theme, weakest, focusPattern };
 }
 
 // -------- add to today --------

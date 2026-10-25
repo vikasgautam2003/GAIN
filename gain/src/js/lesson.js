@@ -204,7 +204,25 @@ function paintLesson(scrim, lesson, ctx) {
 
   // Status banner — if the user already passed, say so; if they're in the yellow zone, say that too.
   if (state.passed) {
-    html.push(`<div class="lsn-status pass"><span>✓</span> Review mode — you've mastered this. Quiz hidden.</div>`);
+    const dryRunKey = `gain:dryrun:${ctx.sheetName}#${ctx.rowIndex}`;
+    const existing = (() => { try { return localStorage.getItem(dryRunKey) || ""; } catch { return ""; } })();
+    html.push(`
+      <div class="lsn-status pass">
+        <span>✓</span> Review mode — you've mastered this. Quiz hidden.
+        <button class="lsn-disguise-btn" id="lsn-disguise-btn" title="See 3 real-world disguises of this problem — interview-mode drill">
+          🎭 See 3 disguises
+        </button>
+      </div>
+      <section class="lsn-sec lsn-dryrun" data-sec="dryRunGate">
+        <h3><span class="lsn-step">🧠</span><span>Dry-run first — before you read the lesson</span></h3>
+        <p class="lsn-setup">In 3 bullets, how would you solve this NOW? Active recall sticks the solve. Reveal when ready.</p>
+        <textarea class="lsn-dryrun-ta" id="lsn-dryrun-ta" placeholder="• The pattern I'd reach for is…&#10;• The invariant I'd rely on is…&#10;• The edge case I'd pre-empt is…">${esc(existing)}</textarea>
+        <div class="lsn-dryrun-actions">
+          <button class="lsn-btn primary" id="lsn-dryrun-save">Save & reveal lesson below ↓</button>
+          <small class="lsn-dryrun-note">Autosaved to this device. Scroll down to compare with the full lesson.</small>
+        </div>
+      </section>
+    `);
   } else if (state.attempts.length >= MAX_ATTEMPTS) {
     html.push(`<div class="lsn-status needhelp"><span>⚠</span> After ${MAX_ATTEMPTS} tries the lesson didn't fully land. Give it one more careful read — a passing quiz now releases the remaining bounty.</div>`);
   }
@@ -249,6 +267,43 @@ function paintLesson(scrim, lesson, ctx) {
   if (foot) foot.hidden = false;
 
   if (!state.passed) paintQuiz(scrim, lesson, ctx, state);
+
+  // Dry-run autosave — persists per sheet row, available for recap later.
+  const dryTa = scrim.querySelector("#lsn-dryrun-ta");
+  const dryKey = `gain:dryrun:${ctx.sheetName}#${ctx.rowIndex}`;
+  if (dryTa) {
+    let saveT;
+    const persist = () => {
+      try { localStorage.setItem(dryKey, dryTa.value || ""); } catch (_) {}
+    };
+    dryTa.addEventListener("input", () => {
+      clearTimeout(saveT);
+      saveT = setTimeout(persist, 350);
+    });
+    scrim.querySelector("#lsn-dryrun-save")?.addEventListener("click", () => {
+      persist();
+      const btn = scrim.querySelector("#lsn-dryrun-save");
+      if (btn) {
+        const original = btn.textContent;
+        btn.textContent = "✓ Saved — compare below";
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1800);
+      }
+    });
+  }
+
+  // Disguise-drill button appears only after the student has passed the quiz.
+  scrim.querySelector("#lsn-disguise-btn")?.addEventListener("click", async () => {
+    const { openDisguiseDrill } = await import("./disguise.js");
+    openDisguiseDrill({
+      title: ctx.title,
+      pattern: ctx.row?.Pattern || ctx.row?.Category || "",
+      difficulty: ctx.row?.Difficulty || "",
+      kind: ctx.kind,
+      sheetName: ctx.sheetName,
+      rowIndex: ctx.rowIndex,
+    });
+  });
 
   // Post-render: wrap each section into a collapsible shell with Elaborate
   // button, hook image lightboxes.
@@ -2310,6 +2365,39 @@ function injectStyles() {
     .lsn-status.pass { background: color-mix(in oklab, var(--green) 10%, var(--paper)); border: 1px solid color-mix(in oklab, var(--green) 28%, var(--line)); color: var(--ink); }
     .lsn-status.needhelp { background: color-mix(in oklab, #e9b100 10%, var(--paper)); border: 1px solid color-mix(in oklab, #e9b100 32%, var(--line)); color: var(--ink); }
     .lsn-status span { font-size: 15px; font-weight: 700; }
+    .lsn-disguise-btn {
+      margin-left: auto;
+      padding: 7px 13px; border-radius: 8px;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 18%, var(--paper)) 0%, color-mix(in oklab, var(--gold) 7%, var(--paper)) 100%);
+      border: 1px solid color-mix(in oklab, var(--gold) 36%, var(--line));
+      color: var(--ink); font: 600 12px/1 var(--font-sans); letter-spacing: -.005em;
+      cursor: pointer; transition: all .14s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .lsn-disguise-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px -4px color-mix(in oklab, var(--gold) 50%, transparent);
+    }
+
+    /* Dry-run gate for review-mode lessons */
+    .lsn-dryrun {
+      margin-bottom: 20px;
+      padding: 18px 20px;
+      background: color-mix(in oklab, var(--blue, #3870ff) 5%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 24%, var(--line));
+      border-left: 3px solid var(--blue, #3870ff);
+      border-radius: 12px;
+    }
+    .lsn-dryrun .lsn-setup { font: 500 13.5px/1.6 var(--font-sans); color: var(--mut); margin: 0 0 10px; }
+    .lsn-dryrun-ta {
+      width: 100%; min-height: 110px; resize: vertical;
+      padding: 12px 14px; border-radius: 10px;
+      border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+      font: 500 13.5px/1.6 var(--font-sans); letter-spacing: -.005em;
+    }
+    .lsn-dryrun-ta:focus { outline: 2px solid var(--blue, #3870ff); outline-offset: -2px; }
+    .lsn-dryrun-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+    .lsn-dryrun-note { color: var(--mut); font: 500 11.5px/1.4 var(--font-sans); }
 
     /* Problem */
     /* Concept-first box (sits before the LeetCode framing in Problem section) */

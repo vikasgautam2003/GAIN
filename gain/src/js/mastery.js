@@ -579,6 +579,11 @@ function openPatternDetail(root, patternName) {
         <div class="m-d-head-left">
           <div class="m-d-eyebrow band-${pattern.band}">${bandLabel}</div>
           <h2 class="m-d-title" id="m-d-title">${esc(patternName)}</h2>
+          <div class="m-d-actions">
+            <button class="m-d-cs-btn" id="m-d-cs-btn" title="Open the dojo-wall cheatsheet for this pattern">
+              <span class="m-d-cs-ic">📄</span> Cheatsheet
+            </button>
+          </div>
           <div class="m-d-stats">
             <div class="m-d-stat-row">
               <span class="m-d-stat"><label>Score</label><b>${pattern.score != null ? pattern.score.toFixed(2) : "—"}</b></span>
@@ -633,6 +638,12 @@ function openPatternDetail(root, patternName) {
       const row = btn.closest(".m-prow");
       await addToToday(row.dataset.sheet, +row.dataset.idx, btn);
     });
+  });
+
+  // Cheatsheet button — opens the dojo-wall cheatsheet for this pattern
+  scrim.querySelector("#m-d-cs-btn")?.addEventListener("click", async () => {
+    const { openCheatsheet } = await import("./cheatsheet.js");
+    openCheatsheet(patternName);
   });
 
   scrim.hidden = false;
@@ -1168,6 +1179,22 @@ function injectStyles() {
     .m-d-eyebrow.band-weak     { background: color-mix(in oklab, var(--red) 22%, var(--paper)); color: var(--red); }
     .m-d-eyebrow.band-untouched{ background: var(--bg); color: var(--mut); border: 1px solid var(--line); }
     .m-d-title { margin: 0 0 8px; font: 600 24px/1.2 var(--font-sans); letter-spacing: -.015em; color: var(--ink); }
+    .m-d-actions { display: flex; gap: 8px; margin: 0 0 12px; flex-wrap: wrap; }
+    .m-d-cs-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 14px; border-radius: 10px;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 18%, var(--paper)) 0%, color-mix(in oklab, var(--gold) 8%, var(--paper)) 100%);
+      border: 1px solid color-mix(in oklab, var(--gold) 36%, var(--line));
+      color: var(--ink); font: 600 12.5px/1 var(--font-sans); letter-spacing: -.005em; cursor: pointer;
+      transition: all .16s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .m-d-cs-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px -4px color-mix(in oklab, var(--gold) 50%, transparent);
+      border-color: color-mix(in oklab, var(--gold) 50%, var(--line));
+    }
+    .m-d-cs-ic { font-size: 14px; }
     .m-d-stats { display: flex; flex-wrap: wrap; gap: 14px; font: 500 12.5px/1 var(--font-sans); color: var(--mut); }
     .m-d-stats b { color: var(--ink); font-weight: 700; }
     .m-d-close {
