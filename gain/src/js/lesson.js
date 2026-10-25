@@ -243,9 +243,172 @@ function paintLesson(scrim, lesson, ctx) {
 
   if (!state.passed) paintQuiz(scrim, lesson, ctx, state);
 
+  // Post-render: wrap each section into a collapsible shell with Elaborate
+  // button, hook image lightboxes.
+  wireSectionShells(scrim, lesson, ctx);
+  wireImageLightbox(scrim);
+
   Promise.resolve()
     .then(() => resolveMedia(scrim, { imageQueries, youtubeQuery: lesson.youtubeQuery }))
     .catch(err => console.warn("[lesson] media resolve failed:", err));
+}
+
+// Wrap each .lsn-sec's post-h3 content in a .lsn-sec-body + inject chevron +
+// Elaborate button into the h3. Idempotent — safe to call multiple times.
+function wireSectionShells(scrim, lesson, ctx) {
+  scrim.querySelectorAll(".lsn-sec").forEach(sec => {
+    if (sec.dataset.shelled === "1") return;
+    sec.dataset.shelled = "1";
+    const h3 = sec.querySelector("h3");
+    if (!h3) return;
+    const sectionKey = sec.dataset.sec || "";
+    // The content after h3 becomes the collapsible body
+    const nodes = [];
+    let n = h3.nextSibling;
+    while (n) { nodes.push(n); n = n.nextSibling; }
+    const body = document.createElement("div");
+    body.className = "lsn-sec-body";
+    nodes.forEach(x => body.appendChild(x));
+    sec.appendChild(body);
+    // Add actions to the h3 right-side
+    const actions = document.createElement("div");
+    actions.className = "lsn-sec-actions";
+    actions.innerHTML = `
+      <button class="lsn-sec-elab" type="button" title="Ask the butler to re-explain this section as if you didn't follow it">✦ Elaborate</button>
+      <button class="lsn-sec-chev" type="button" aria-expanded="true" aria-label="Toggle section">▾</button>
+    `;
+    h3.appendChild(actions);
+    // Collapse toggle
+    actions.querySelector(".lsn-sec-chev").addEventListener("click", () => {
+      const open = sec.classList.toggle("collapsed");
+      actions.querySelector(".lsn-sec-chev").setAttribute("aria-expanded", String(!open));
+    });
+    // Elaborate — if sectionKey is known, fire the Groq re-explain
+    actions.querySelector(".lsn-sec-elab").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      if (sec.classList.contains("collapsed")) sec.classList.remove("collapsed");
+      // If an elaboration card is already present, toggle hide/show
+      const existing = body.querySelector(".lsn-elab-card");
+      if (existing) { existing.remove(); return; }
+      btn.disabled = true; const original = btn.textContent;
+      btn.textContent = "Thinking…";
+      try {
+        const data = await fetchSectionElaboration({
+          topic: ctx.title, kind: ctx.kind, sectionKey,
+          sectionContent: body.innerText.slice(0, 1500),
+        });
+        const card = document.createElement("div");
+        card.className = "lsn-elab-card";
+        card.innerHTML = `
+          <div class="lsn-elab-head">
+            <span class="lsn-elab-tag">✦ Elaboration — "${esc(sectionLabel(sectionKey))}"</span>
+            <button class="lsn-elab-close" type="button" aria-label="Hide elaboration">✕</button>
+          </div>
+          ${data.paragraph ? `<p class="lsn-elab-para">${renderMarkdown(data.paragraph)}</p>` : ""}
+          ${Array.isArray(data.bullets) && data.bullets.length ? `
+            <ul class="lsn-elab-bullets">
+              ${data.bullets.map(b => `<li>${renderMarkdown(b)}</li>`).join("")}
+            </ul>` : ""}
+          ${data.analogy ? `<div class="lsn-elab-analogy"><span class="lsn-elab-analogy-tag">Everyday analogy</span>${renderMarkdown(data.analogy)}</div>` : ""}
+        `;
+        body.appendChild(card);
+        card.querySelector(".lsn-elab-close").addEventListener("click", () => card.remove());
+      } catch (err) {
+        const errCard = document.createElement("div");
+        errCard.className = "lsn-elab-card err";
+        errCard.innerHTML = `<p>Couldn't elaborate — ${esc(err.message || String(err))}</p>`;
+        body.appendChild(errCard);
+      } finally {
+        btn.disabled = false; btn.textContent = original;
+      }
+    });
+  });
+}
+
+const SECTION_LABELS = {
+  problem: "Problem in simple words",
+  intuition: "Core intuition",
+  dryRun: "Dry run",
+  code: "Code",
+  edgeCases: "Edge cases",
+  complexity: "Complexity",
+  tradeoffs: "Trade-offs",
+  interviewPointers: "Interview pointers",
+  revisionNotes: "Revision notes",
+};
+function sectionLabel(key) { return SECTION_LABELS[key] || key; }
+
+// Click any lesson image → open a full-screen lightbox. Esc or background click closes.
+function wireImageLightbox(scrim) {
+  if (scrim.dataset.lightboxWired === "1") return;
+  scrim.dataset.lightboxWired = "1";
+  scrim.addEventListener("click", (e) => {
+    const img = e.target?.closest?.(".lsn-img img, .lsn-vid-thumb-img");
+    if (!img) return;
+    e.preventDefault();
+    openImageLightbox(img.src, img.alt || "");
+  });
+}
+function openImageLightbox(src, alt) {
+  document.querySelectorAll(".lsn-lightbox").forEach(x => x.remove());
+  const box = document.createElement("div");
+  box.className = "lsn-lightbox";
+  box.innerHTML = `
+    <button class="lsn-lb-close" type="button" aria-label="Close">✕</button>
+    <img src="${esc(src)}" alt="${esc(alt)}" />
+  `;
+  document.body.appendChild(box);
+  const close = () => { box.remove(); document.removeEventListener("keydown", esckey); };
+  const esckey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", esckey);
+  box.addEventListener("click", (e) => { if (e.target === box || e.target.classList?.contains?.("lsn-lb-close")) close(); });
+}
+
+// Groq elaboration — fires only on explicit Elaborate click. Cached forever per topic+section.
+async function fetchSectionElaboration({ topic, kind, sectionKey, sectionContent }) {
+  const cacheKey = `gain:lessonElab:${sectionKey}:${topic}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) return JSON.parse(cached);
+  } catch (_) {}
+  const apiKey = (await secure.get("groq_api_key").catch(() => null)) ||
+                 (await secure.get("grok_api_key").catch(() => null));
+  if (!apiKey) throw new Error("No Groq API key.");
+  const label = sectionLabel(sectionKey);
+  const system = `You are a staff FDE engineer re-teaching a specific lesson section because the student did NOT follow it the first time.
+They have ALREADY read what's below — don't repeat it verbatim. Approach from a FRESH angle, use everyday analogies, break the thing they probably got stuck on into smaller pieces.
+
+Reply with VALID JSON only (no code fences, no preamble):
+{
+  "paragraph": "2-4 sentences explaining the same idea from a new angle, in plain human language",
+  "bullets": ["3-5 short points, each targeting ONE likely misunderstanding — concrete, specific, not generic reminders"],
+  "analogy": "ONE everyday-object analogy that makes the concept click (a book, a jar, a staircase, a line of people)"
+}
+
+Rules:
+- Do NOT repeat the exact sentences from the original content.
+- Assume the student is smart but hit a wall. Teach, don't lecture.
+- Analogy must be concrete and short (one sentence).
+- Bullets must be points-form, each < 25 words.`;
+  const user = `Topic: ${topic}
+Kind: ${kind}
+Section: "${label}"
+Original section content the student just read:
+---
+${sectionContent}
+---
+Please elaborate — assume they didn't understand.`;
+  const res = await callGroqJSON({
+    apiKey, system, user, maxTokens: 1024, label: `elaborate:${sectionKey}`,
+    schemaCheck: (obj) => {
+      if (!obj) return "no object";
+      if (!obj.paragraph && !obj.bullets?.length) return "paragraph or bullets required";
+      return true;
+    },
+  });
+  if (!res.ok) throw new Error(res.error);
+  try { localStorage.setItem(cacheKey, JSON.stringify(res.data)); } catch (_) {}
+  return res.data;
 }
 
 // One section = one HTML chunk + optional image query that resolveMedia will fill.
@@ -255,12 +418,24 @@ function renderSectionHTML(sec, lesson, { stepIdx }) {
 
   if (sec === "problem") {
     const p = lesson.problem || {};
+    const examplesHtml = (p.examples?.length)
+      ? `<div class="lsn-examples">
+           ${p.examples.map((ex, i) => `
+             <div class="lsn-example-card">
+               <div class="lsn-example-head">Example ${i + 1}</div>
+               ${ex.input ? `<div class="lsn-example-row"><span class="lsn-example-k">Input</span><code>${esc(ex.input)}</code></div>` : ""}
+               ${ex.output ? `<div class="lsn-example-row"><span class="lsn-example-k">Output</span><code>${esc(ex.output)}</code></div>` : ""}
+               ${ex.explanation ? `<div class="lsn-example-row"><span class="lsn-example-k">Explanation</span><span class="lsn-example-exp">${renderMarkdown(ex.explanation)}</span></div>` : ""}
+             </div>
+           `).join("")}
+         </div>`
+      : (p.example ? `<div class="lsn-example"><span class="lsn-example-tag">Example</span><code>${esc(p.example)}</code></div>` : "");
     return {
       html: `<section class="lsn-sec" data-sec="problem">
         <h3>${step}<span>Problem in simple words</span></h3>
         ${p.concept ? `<div class="lsn-concept"><span class="lsn-concept-tag">The idea</span>${renderMarkdown(p.concept)}</div>` : ""}
         ${p.setup ? `<p class="lsn-setup">${renderMarkdown(p.setup)}</p>` : ""}
-        ${p.example ? `<div class="lsn-example"><span class="lsn-example-tag">Example</span><code>${esc(p.example)}</code></div>` : ""}
+        ${examplesHtml}
         ${p.imageQuery ? imageFigureHTML(p.imageQuery) : ""}
       </section>`,
       image: img(p.imageQuery),
@@ -826,6 +1001,12 @@ function normalizeLesson(p, plan) {
     problem: {
       concept: normStr(p.problem?.concept),
       setup: normStr(p.problem?.setup),
+      // Prefer structured LeetCode-style examples; fall back to the single `example` string.
+      examples: arr(p.problem?.examples).map(e => ({
+        input: normStr(e.input),
+        output: normStr(e.output),
+        explanation: normStr(e.explanation),
+      })).filter(e => e.input || e.output).slice(0, 3),
       example: normStr(p.problem?.example),
       imageQuery: normStr(p.problem?.imageQuery),
     },
@@ -879,7 +1060,7 @@ function buildSystemPrompt(kind, plan, { rebuildMode = false } = {}) {
 
   const schemaParts = [];
   schemaParts.push(`"oneLineGist": "one sentence capturing the key idea"`);
-  schemaParts.push(`"problem": {"concept": "2-3 sentences explaining the UNDERLYING CONCEPT in plain human language, as if to someone who has never seen a LeetCode problem — e.g. for Two Sum: 'you have a list of numbers and want to find two that add up to a target; the question is how to do that without checking every pair'", "setup": "then the LeetCode-style framing in 1-2 sentences: what is given, what to return", "example": "one tiny worked example with real numbers e.g. myPow(2,4)=16", "imageQuery": "google image query for a problem diagram, or empty"}`);
+  schemaParts.push(`"problem": {"concept": "2-3 sentences explaining the UNDERLYING CONCEPT in plain human language, as if to someone who has never seen a LeetCode problem — e.g. for Two Sum: 'you have a list of numbers and want to find two that add up to a target; the question is how to do that without checking every pair'", "setup": "then the LeetCode-style framing in 1-2 sentences: what is given, what to return", "examples": [{"input": "exact input in code-like notation, e.g. nums=[2,7,11,15], target=9", "output": "exact return value in code-like notation, e.g. [0,1]", "explanation": "ONE sentence connecting the input to the output in plain words — the WHY, not just the WHAT"}], "imageQuery": "google image query for a problem diagram, or empty"}`);
   schemaParts.push(`"intuition": {"setup": "lead-in sentence", "trick": "the key insight in one sentence", "whyItWorks": "2-3 sentences explaining the invariant", "imageQuery": "google image query for an intuition visualization, or empty"}`);
   if (plan.includes("dryRun")) {
     schemaParts.push(`"dryRun": {"example": "the specific input traced", "steps": [{"call": "pow(2,10)", "returns": "32*32 = 1024", "note": "optional 1-sentence explanation of what this step is doing"}], "realWorldScenario": "2-3 sentences describing a REAL-WORLD scenario where this same algorithm/technique appears in actual software (e.g. for monotonic stack: 'stock-price streaming analytics tracking next-higher-price per tick' or 'auto-complete rendering showing the next-relevant suggestion'). Must be a plausible, specific product/engineering context — not a generic 'this is used in many places' hand-wave.", "realWorldImageQuery": "google image query for a diagram/screenshot of that real-world scenario (e.g. stock chart next-greater element, order-book visualization)", "imageQuery": "call-stack or trace visualization query, or empty"}`);
@@ -939,6 +1120,7 @@ RULES:
 - Tone: teacher-first, concrete, keyword-dense. Mention specific products / numbers / data structures.
 - Keep oneLineGist to ONE short sentence.
 - Keep interviewPointers and revisionNotes to EXACTLY 3 items each.
+- Examples: give 2 to 3 worked examples in the problem.examples array, LeetCode-style (input, output, explanation). The first example should be the simplest case; the last should probe an edge or a subtle variation.
 
 Reply as JSON.`;
 }
@@ -1418,18 +1600,121 @@ function injectStyles() {
       color: var(--gold); flex-shrink: 0;
     }
 
-    .lsn-sec { margin-bottom: 36px; }
+    .lsn-sec { margin-bottom: 56px; }
+    .lsn-sec + .lsn-sec { padding-top: 8px; }
     .lsn-sec h3 {
-      margin: 0 0 14px; font-size: 15px; font-weight: 700;
+      margin: 0 0 22px; font-size: 16px; font-weight: 700;
       letter-spacing: .01em; color: var(--mut);
-      padding-bottom: 10px; border-bottom: 1px solid var(--line);
+      padding-bottom: 12px; border-bottom: 1px solid var(--line);
       display: flex; align-items: center; gap: 10px;
     }
+    .lsn-sec h3 > span:not(.lsn-step) { flex: 1; min-width: 0; }
     .lsn-sec .lsn-setup {
-      margin: 0 0 14px; font-size: 14.5px; line-height: 1.65;
+      margin: 0 0 16px; font-size: 14.5px; line-height: 1.7;
       color: var(--ink);
     }
-    .lsn-sec > * + * { margin-top: 14px; }
+    .lsn-sec-body > * + * { margin-top: 18px; }
+    .lsn-sec.collapsed .lsn-sec-body { display: none; }
+    .lsn-sec.collapsed h3 { margin-bottom: 0; border-bottom-color: transparent; }
+
+    /* Section actions (right of title) */
+    .lsn-sec-actions {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-left: auto; flex-shrink: 0;
+    }
+    .lsn-sec-elab {
+      padding: 6px 12px; border-radius: 7px;
+      font: 700 11px/1 var(--font-sans); letter-spacing: .04em;
+      background: color-mix(in oklab, var(--blue, #3870ff) 10%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 32%, var(--line));
+      color: var(--blue, #3870ff); cursor: pointer;
+      transition: all .18s;
+    }
+    .lsn-sec-elab:hover:not(:disabled) { background: color-mix(in oklab, var(--blue, #3870ff) 18%, var(--paper)); transform: translateY(-1px); }
+    .lsn-sec-elab:disabled { opacity: .6; cursor: wait; }
+    .lsn-sec-chev {
+      width: 26px; height: 26px; border-radius: 6px;
+      border: 1px solid var(--line); background: var(--paper);
+      color: var(--mut); cursor: pointer;
+      font: 400 12px/1 var(--font-sans);
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: all .18s;
+    }
+    .lsn-sec-chev:hover { color: var(--ink); border-color: var(--line2); }
+    .lsn-sec.collapsed .lsn-sec-chev { transform: rotate(-90deg); }
+
+    /* Elaboration card */
+    .lsn-elab-card {
+      margin-top: 16px; padding: 16px 18px;
+      background: color-mix(in oklab, var(--blue, #3870ff) 5%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 22%, var(--line));
+      border-radius: 12px;
+      animation: elabFade .22s ease-out both;
+    }
+    @keyframes elabFade { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+    .lsn-elab-card.err { background: color-mix(in oklab, var(--red) 7%, var(--paper)); border-color: color-mix(in oklab, var(--red) 24%, var(--line)); }
+    .lsn-elab-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .lsn-elab-tag { font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--blue, #3870ff); }
+    .lsn-elab-close { border: none; background: transparent; color: var(--mut); cursor: pointer; font: 400 14px/1 var(--font-sans); padding: 2px 4px; transition: color .14s; }
+    .lsn-elab-close:hover { color: var(--ink); }
+    .lsn-elab-para { margin: 0 0 10px; font: 500 14px/1.7 var(--font-sans); color: var(--ink); }
+    .lsn-elab-bullets { margin: 0 0 10px; padding-left: 22px; list-style: none; }
+    .lsn-elab-bullets li { position: relative; padding: 6px 0; font: 500 13.5px/1.6 var(--font-sans); color: var(--ink); }
+    .lsn-elab-bullets li::before { content: "→"; position: absolute; left: -18px; top: 6px; color: var(--blue, #3870ff); font-weight: 700; }
+    .lsn-elab-analogy {
+      margin-top: 10px; padding: 12px 14px;
+      background: var(--paper); border: 1px dashed color-mix(in oklab, var(--blue, #3870ff) 32%, var(--line));
+      border-radius: 8px;
+      font: 500 13.5px/1.6 var(--font-sans); color: var(--ink); font-style: italic;
+    }
+    .lsn-elab-analogy-tag { display: block; font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--blue, #3870ff); margin-bottom: 6px; font-style: normal; }
+
+    /* LeetCode-style structured examples */
+    .lsn-examples { display: flex; flex-direction: column; gap: 14px; }
+    .lsn-example-card {
+      padding: 14px 16px;
+      background: var(--bg); border: 1px solid var(--line);
+      border-left: 3px solid var(--gold);
+      border-radius: 0 10px 10px 0;
+    }
+    .lsn-example-head { font: 700 11px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); margin-bottom: 10px; }
+    .lsn-example-row { display: grid; grid-template-columns: 90px 1fr; gap: 10px; padding: 5px 0; align-items: baseline; }
+    .lsn-example-k { font: 700 11px/1.3 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--mut); }
+    .lsn-example-row code {
+      display: inline-block; background: var(--paper); border: 1px solid var(--line); border-radius: 5px;
+      padding: 3px 8px; font: 500 12.5px/1.5 var(--font-mono, ui-monospace,SFMono-Regular,Menlo,monospace);
+      color: var(--ink); white-space: pre-wrap; word-break: break-word;
+    }
+    .lsn-example-exp { font: 500 13px/1.55 var(--font-sans); color: var(--ink); }
+    @media (max-width: 560px) {
+      .lsn-example-row { grid-template-columns: 1fr; gap: 4px; }
+    }
+
+    /* Image lightbox */
+    .lsn-img img, .lsn-vid-thumb-img { cursor: zoom-in; }
+    .lsn-lightbox {
+      position: fixed; inset: 0; z-index: 9999;
+      background: rgba(0,0,0,.92);
+      display: flex; align-items: center; justify-content: center;
+      padding: 40px;
+      animation: lbFade .18s ease-out both;
+    }
+    @keyframes lbFade { from { opacity: 0; } to { opacity: 1; } }
+    .lsn-lightbox img {
+      max-width: 100%; max-height: 100%; object-fit: contain;
+      border-radius: 8px; box-shadow: 0 24px 80px rgba(0,0,0,.6);
+      cursor: zoom-out;
+    }
+    .lsn-lb-close {
+      position: absolute; top: 20px; right: 24px;
+      width: 44px; height: 44px; border-radius: 50%;
+      background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.24);
+      color: #fff; cursor: pointer;
+      font: 400 20px/1 var(--font-sans);
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: all .14s;
+    }
+    .lsn-lb-close:hover { background: rgba(255,255,255,.24); transform: scale(1.05); }
     .lsn-sec .lsn-bullets {
       margin: 0; padding-left: 0; list-style: none;
     }
