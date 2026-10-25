@@ -376,20 +376,24 @@ async function fetchSectionElaboration({ topic, kind, sectionKey, sectionContent
   if (!apiKey) throw new Error("No Groq API key.");
   const label = sectionLabel(sectionKey);
   const system = `You are a staff FDE engineer re-teaching a specific lesson section because the student did NOT follow it the first time.
-They have ALREADY read what's below — don't repeat it verbatim. Approach from a FRESH angle, use everyday analogies, break the thing they probably got stuck on into smaller pieces.
+They have ALREADY read what's below — don't repeat it verbatim. Approach from a FRESH angle.
 
 Reply with VALID JSON only (no code fences, no preamble):
 {
-  "paragraph": "2-4 sentences explaining the same idea from a new angle, in plain human language",
-  "bullets": ["3-5 short points, each targeting ONE likely misunderstanding — concrete, specific, not generic reminders"],
+  "paragraph": "2-4 sentences explaining the same idea from a NEW angle, in plain human language",
+  "bullets": ["3-5 short points, each targeting ONE likely misunderstanding"],
   "analogy": "ONE everyday-object analogy that makes the concept click (a book, a jar, a staircase, a line of people)"
 }
 
-Rules:
-- Do NOT repeat the exact sentences from the original content.
-- Assume the student is smart but hit a wall. Teach, don't lecture.
-- Analogy must be concrete and short (one sentence).
-- Bullets must be points-form, each < 25 words.`;
+Teaching craft:
+1. SHOW THE WALL — begin paragraph by naming the specific mental step the student probably tripped on. e.g. "The jump most people miss here is X."
+2. ANALOGY FIRST, CODE SECOND — explain with a physical object before any code reference.
+3. NAME THE INVARIANT — if the section is about an algorithm, state the invariant as a complete quotable sentence.
+4. NO JARGON WITHOUT A 5-WORD GLOSS — if you reuse any technical term from the original, immediately define it in parentheses.
+5. BULLETS = MISCONCEPTION KILLERS — each bullet starts with the wrong intuition and ends with the right one. Format: "Not X — it's actually Y because Z."
+6. CONCRETE NUMBERS — if the original used a worked example, your paragraph should trace a SHORTER example in human words.
+7. ONE IDEA PER SENTENCE. Max 20 words per sentence.
+8. Do NOT repeat the exact sentences from the original content.`;
   const user = `Topic: ${topic}
 Kind: ${kind}
 Section: "${label}"
@@ -1087,18 +1091,20 @@ function buildSystemPrompt(kind, plan, { rebuildMode = false } = {}) {
   ]`);
 
   const rebuildBlock = rebuildMode ? `
-REBUILD MODE — the previous version of this lesson was too abstract. The user failed the quiz.
-Rewrite it SIMPLER:
+REBUILD MODE — the previous version failed the quiz. The student is sincere, you were too abstract. Rewrite SIMPLER:
 - Shorter sentences (max 15 words).
-- Everyday-object analogies (a book, a jar, a staircase, a line of people).
-- More concrete numbers in every example.
-- Expand the dry run to show EVERY step.
-- Add explicit "why this works?" after the trick.
-- Replace all jargon with plain words on first use.
+- Lead every text field with an everyday analogy (a book, a jar, a staircase, a line of people).
+- More concrete numbers — if the previous had n, replace with n=5 and trace it.
+- Dry run shows EVERY step with a human-words "what state looks like now" note.
+- Add explicit "why this works?" after each trick.
+- NO jargon unless defined in the same sentence.
+- Address the student directly ("Think of it like..."). Do not use "we" or "one".
+- Open the intuition section by showing what the naive approach would do WRONG — contrast makes it stick.
 ` : "";
 
-  return `You are a staff FDE interviewer teaching a motivated student their FIRST exposure to this topic.
-Clarity > cleverness. Interview-grade knowledge, student-friendly delivery.
+  return `You are a staff FDE engineer teaching a motivated student their FIRST exposure to this topic.
+You are not writing documentation. You are teaching. The student is smart but has never seen this problem.
+Your job is to make the concept CLICK — so clearly that they can explain it back after one read.
 ${rebuildBlock}
 Reply with VALID JSON matching this shape (no markdown, no code fences, no preamble):
 
@@ -1106,7 +1112,49 @@ Reply with VALID JSON matching this shape (no markdown, no code fences, no pream
 ${schemaParts.map(p => "  " + p).join(",\n")}
 }
 
-RULES:
+TEACHING CRAFT (apply across every text field — this is what separates a good lesson from a mediocre one):
+
+1. SHOW THE WALL FIRST.
+   Before giving the trick, write ONE sentence showing the obvious naive approach and why it hurts.
+   Example: "You could check every pair — that's O(n²) and 10^8 pairs is a second of wall time."
+   Only then introduce the clever idea. Students need to feel the problem before they appreciate the solution.
+
+2. NAME THE INVARIANT EXPLICITLY.
+   In "whyItWorks", write the invariant as a complete sentence a student can quote back:
+   "After processing index i, the stack holds exactly the indices whose next-greater element hasn't been found yet."
+   NOT "it maintains an invariant" or "by induction it's correct."
+
+3. NO JARGON WITHOUT A PLAIN DEFINITION ON FIRST USE.
+   First time you say "monotonic stack" / "memoization" / "two-pointer" — give a 6-word plain-English gloss in parentheses.
+   e.g. "Monotonic stack (a stack whose values always decrease)".
+
+4. ANSWER "WHY NOT X?" BEFORE THE STUDENT ASKS.
+   The intuition section should pre-empt the top 1-2 "why can't I just..." reactions.
+   e.g. "Why not sort first? Because sorting destroys the original indices we must return."
+
+5. DRY RUN = TEACH BY DOING, NOT RECITE.
+   For each dry-run step, the "note" field must explain WHAT STATE LOOKS LIKE after this step, in human words.
+   e.g. note: "Stack now holds [1, 4] because 4's temperature (72) is still waiting for a hotter day."
+   Do NOT write "we push 4" — write what pushing 4 ACHIEVES.
+
+6. CONCRETE NUMBERS, NOT PLACEHOLDERS.
+   Every example uses real numbers the student can trace. Never "arr[i]" when you can write "arr[2] = 7".
+   Edge cases must name the specific input shape, not "when input is empty" — write "when nums = []".
+
+7. ONE IDEA PER SENTENCE.
+   Short sentences. Max 20 words. If a sentence has two "and"s or a comma + "which", split it.
+
+8. TEACH BY CONTRAST.
+   At least once in intuition OR edgeCases, use "the naive X does Y, so we do Z instead". Contrast makes mechanisms memorable.
+
+9. CODE EXPLANATIONS TARGET THE "WAIT, WHY?" MOMENT.
+   lineExplanations should pick the 4-6 lines where a reader goes "why that?" — not every line.
+   Each "why" names the specific confusion the line resolves. Not "this is the loop" — "this checks the top of the stack because that's the newest unresolved index."
+
+10. INTERVIEW POINTERS = THE FOLLOW-UP THEY WILL ACTUALLY ASK.
+    Each pointer references a REAL follow-up: "What if the array doesn't fit in memory?" "What breaks when n = INT_MIN?" Not generic "think about edge cases."
+
+STRUCTURAL RULES:
 - Return the EXACT keys above. Do not add or drop keys.
 - Images: for every imageQuery, pick a search phrase that returns a TEACHING DIAGRAM (not stock photo, not a person). Return empty string if no diagram helps.
 - Code: ${isProgrammatic ? `FULL compilable ${codeLang.toUpperCase()} code block. Correct indentation. Standard idiom (${codeLang === "java" ? "public class Solution with a method named per LeetCode convention" : "a single query"}).` : "no code field needed"}
@@ -1117,7 +1165,6 @@ RULES:
   * Q4 edge-case: pick the gotcha the student might miss. Must align with edgeCases list.
   * Q5 interview pointer: ties to interviewPointers section.
 - Distractors: all 4 options MUST be plausible — no "banana" throwaways. Wrong options should encode real misconceptions a half-prepared student holds. NO "all/none of the above". NO yes/no. Exactly one correct answer.
-- Tone: teacher-first, concrete, keyword-dense. Mention specific products / numbers / data structures.
 - Keep oneLineGist to ONE short sentence.
 - Keep interviewPointers and revisionNotes to EXACTLY 3 items each.
 - Examples: give 2 to 3 worked examples in the problem.examples array, LeetCode-style (input, output, explanation). The first example should be the simplest case; the last should probe an edge or a subtle variation.
