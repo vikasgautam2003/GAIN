@@ -688,11 +688,31 @@ function injectStyles() {
   const s = document.createElement("style");
   s.id = "mastery-styles";
   s.textContent = `
-    .mastery .m-scrim[hidden] { display: none !important; }
+    /* These rules must NOT be scoped to .mastery — the scrim is portaled
+       to document.body (outside .mastery), so an ancestor-based rule would
+       stop matching and the invisible overlay would eat clicks on the page. */
+    .m-scrim[hidden] { display: none !important; }
     .mastery .m-shaky-sec[hidden] { display: none !important; }
     .mastery .m-distrib-sec[hidden] { display: none !important; }
 
-    .mastery { padding: 18px 16px 60px; --m-max: 1120px; }
+    .mastery {
+      position: relative;
+      padding: 18px 16px 60px;
+      --m-max: 1120px;
+    }
+    /* Ambient hero glow — a soft gold/warm radial that gives the whole page
+       a premium, lit-from-above feeling. Fully behind content. */
+    .mastery::before {
+      content: ""; position: absolute; top: 0; left: 50%;
+      width: min(1100px, 90vw); height: 420px;
+      transform: translateX(-50%);
+      background:
+        radial-gradient(45% 65% at 50% 0%,
+          color-mix(in oklab, var(--gold) 10%, transparent) 0%,
+          transparent 70%);
+      pointer-events: none; z-index: 0;
+    }
+    .mastery > * { position: relative; z-index: 1; }
 
     /* ---- HERO ---- */
     .m-head {
@@ -713,7 +733,15 @@ function injectStyles() {
     .m-eyebrow::before {
       content: ""; display: inline-block; width: 24px; height: 1.5px; background: var(--gold); opacity: .6;
     }
-    .m-title { margin: 0 0 12px; font: 600 46px/1.02 var(--font-sans); letter-spacing: -.03em; color: var(--ink); }
+    .m-title {
+      margin: 0 0 12px;
+      font: 600 52px/1.0 var(--font-sans);
+      letter-spacing: -.035em;
+      color: var(--ink);
+      background: linear-gradient(180deg, var(--ink) 0%, color-mix(in oklab, var(--ink) 85%, var(--mut)) 100%);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
     .m-motiv { font: 400 15px/1.55 var(--font-sans); color: var(--mut); margin: 0; max-width: 58ch; }
     .m-motiv b { color: var(--ink); font-weight: 600; }
 
@@ -777,34 +805,35 @@ function injectStyles() {
     .m-sec-sub { color: var(--mut); font-size: 12.5px; }
     .m-sec-h-inner { margin: 0 0 12px; }
 
-    /* ---- TABS ---- */
+    /* ---- TABS (segmented control) ---- */
     .m-tabs {
-      display: inline-flex; gap: 2px; max-width: var(--m-max); margin: 10px auto 24px;
-      padding: 4px; border-radius: 12px;
-      background: color-mix(in oklab, var(--mut) 10%, var(--paper));
+      display: inline-flex; gap: 2px; max-width: var(--m-max); margin: 10px auto 28px;
+      padding: 5px; border-radius: 14px;
+      background: color-mix(in oklab, var(--mut) 8%, var(--paper));
       border: 1px solid var(--line);
+      box-shadow: 0 1px 2px rgba(0,0,0,.03) inset;
     }
     .m-tab {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 8px 16px; border-radius: 9px; border: none; background: transparent;
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 9px 18px; border-radius: 10px; border: none; background: transparent;
       font: 600 13px/1 var(--font-sans); color: var(--mut); cursor: pointer;
-      transition: all .18s ease; letter-spacing: -.005em;
+      transition: color .18s ease, background .22s cubic-bezier(.2,.9,.3,1), box-shadow .18s ease;
+      letter-spacing: -.005em;
     }
     .m-tab:hover { color: var(--ink); }
     .m-tab.active {
       background: var(--paper); color: var(--ink);
       box-shadow:
-        0 1px 2px rgba(0,0,0,.06),
-        0 0 0 1px var(--line);
+        0 2px 4px rgba(0,0,0,.06),
+        0 0 0 1px color-mix(in oklab, var(--line) 80%, var(--ink));
     }
     .m-tab-count {
-      font: 600 10.5px/1 var(--font-sans); color: var(--mut);
+      font: 700 10.5px/1 var(--font-sans); color: var(--mut);
       background: color-mix(in oklab, var(--mut) 14%, transparent);
       padding: 3px 7px; border-radius: 999px; min-width: 20px; text-align: center;
     }
     .m-tab.active .m-tab-count {
-      background: color-mix(in oklab, var(--ink) 10%, transparent);
-      color: var(--ink);
+      background: var(--gold); color: var(--paper);
     }
     .m-tab-dot { display: none; }
 
@@ -871,21 +900,28 @@ function injectStyles() {
     .m-shaky-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
     .shaky-card {
       position: relative;
-      padding: 13px 32px 12px 16px;
-      background: var(--paper); border: 1px solid var(--line); border-radius: 11px;
+      padding: 14px 36px 13px 18px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
       cursor: pointer;
-      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+      transition: transform .2s cubic-bezier(.2,.9,.3,1), box-shadow .2s ease, border-color .2s ease;
       overflow: hidden;
-      display: flex; flex-direction: column; gap: 6px;
+      display: flex; flex-direction: column; gap: 7px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.03);
     }
     .shaky-card::before {
       content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     }
-    .shaky-card.sev-high::before { background: var(--red); }
-    .shaky-card.sev-mid::before  { background: var(--gold); }
-    .shaky-card.sev-low::before  { background: var(--blue, #3870ff); }
-    .shaky-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.08); border-color: var(--line2); }
-    .shaky-card:hover .sh-arrow { transform: translateX(4px); opacity: 1; }
+    .shaky-card.sev-high::before { background: var(--red); box-shadow: 0 0 12px color-mix(in oklab, var(--red) 50%, transparent); }
+    .shaky-card.sev-mid::before  { background: var(--gold); box-shadow: 0 0 12px color-mix(in oklab, var(--gold) 50%, transparent); }
+    .shaky-card.sev-low::before  { background: var(--blue, #3870ff); box-shadow: 0 0 12px color-mix(in oklab, var(--blue, #3870ff) 50%, transparent); }
+    .shaky-card:hover {
+      transform: translateY(-3px);
+      box-shadow:
+        0 14px 28px -8px rgba(0,0,0,.12),
+        0 4px 8px rgba(0,0,0,.04);
+      border-color: var(--line2);
+    }
+    .shaky-card:hover .sh-arrow { transform: translateX(6px); opacity: 1; }
 
     .sh-top { display: flex; justify-content: space-between; align-items: center; }
     .sh-stars { font: 600 13px/1 var(--font-sans); letter-spacing: .06em; }
