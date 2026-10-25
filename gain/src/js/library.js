@@ -5,6 +5,7 @@
 import { getSheets, getSettings, updateSheetRow, addSheetRow, deleteSheetRow, addSheet, removeSheet, persistSheet, emit, on } from "./store.js";
 import { parseCSV } from "./csv.js";
 import { confirmDanger, openFormModal } from "./modals.js";
+import { companyIconHtml, injectCompanyStyles, parseCompanies } from "./companies.js";
 
 // Canonical column roles the engine understands. Any CSV can be mapped to these.
 const ROLES = [
@@ -21,7 +22,7 @@ const ROLES = [
 ];
 
 let active = null;        // sheet name currently viewed
-let filters = { q: "", status: "", pattern: "", freq: "", quick: "" };
+let filters = { q: "", status: "", pattern: "", freq: "", quick: "", company: "" };
 let hiddenCols = {};      // { sheetName: Set<header> }
 let colsOpen = false;
 let unsub = null;
@@ -29,7 +30,7 @@ let unsub = null;
 function getHidden(sheetName, headers) {
   if (!hiddenCols[sheetName]) {
     // Default: hide less-useful columns to keep rows readable without horizontal scroll.
-    const keepRE = /^(seq|problem|topic|skill or platform|skill|name|pattern|category|freq|priority|difficulty|status|confidence|datesolved|datedone)$/i;
+    const keepRE = /^(seq|problem|topic|skill or platform|skill|name|pattern|category|freq|priority|difficulty|status|confidence|datesolved|datedone|companies|company)$/i;
     hiddenCols[sheetName] = new Set(headers.filter(h => !keepRE.test(h)));
   }
   return hiddenCols[sheetName];
@@ -41,6 +42,7 @@ function toggleHidden(sheetName, header) {
 
 export default {
   async mount(root, params) {
+    injectCompanyStyles();
     const sheets = getSheets();
     const names = Object.keys(sheets);
     // Jump to the sheet named in the hash (e.g. #library/System%20Design)
@@ -115,10 +117,42 @@ function render() {
       .lib .lib-tab .tab-count { font-size: 11px; opacity: .7; }
       .lib .lib-tab-spacer { flex: 1; }
 
-      .lib .lib-chips {
-        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-        margin-bottom: 10px;
+      .lib .lib-chips { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+      .lib .lib-chip-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .lib .lib-company-row {
+        display: flex; align-items: center; gap: 6px;
+        overflow-x: auto; scrollbar-width: thin;
+        padding: 4px 2px;
+        border-top: 1px dashed var(--line);
       }
+      .lib .lib-company-row::-webkit-scrollbar { height: 6px; }
+      .lib .lib-company-row::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 999px; }
+      .lib .lib-cfilter {
+        display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+        padding: 5px 10px 5px 6px; background: var(--paper); border: 1px solid var(--line);
+        border-radius: 999px; cursor: pointer; font: 500 12px/1 var(--font-sans); color: var(--mut);
+        transition: all .14s ease;
+      }
+      .lib .lib-cfilter:hover { color: var(--ink); border-color: var(--line2); transform: translateY(-1px); }
+      .lib .lib-cfilter.active {
+        color: var(--ink); border-color: var(--ink);
+        background: color-mix(in oklab, var(--ink) 6%, var(--paper));
+        font-weight: 600;
+      }
+      .lib .lib-cfilter .cf-all { padding: 0 4px; }
+      .lib .lib-cfilter .cf-name { white-space: nowrap; }
+      .lib .co-cell { padding: 6px 8px !important; position: relative; }
+      .lib .co-cell-chips { display: inline-flex; align-items: center; gap: 3px; pointer-events: none; }
+      .lib .co-cell-more { font: 600 10.5px/1 var(--font-sans); color: var(--mut); margin-left: 2px; }
+      .lib .co-cell-input {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        padding: 6px 8px; background: transparent; border: none; color: transparent;
+        font: 400 12px/1.4 var(--font-sans); z-index: 2;
+      }
+      .lib .co-cell-input:focus { background: var(--paper); color: var(--ink); outline: 2px solid var(--blue); outline-offset: -2px; }
+      .lib .co-cell-input:focus ~ .co-cell-chips { opacity: 0; }
+      .lib .co-cell-empty .co-cell-input { color: var(--mut); position: static; height: auto; padding: 4px 6px; }
+      .lib .co-cell .co-ico { border: 1px solid var(--line); }
       .lib .lib-chip {
         padding: 6px 12px; border-radius: 999px;
         background: var(--paper); border: 1px solid var(--line);
@@ -265,21 +299,22 @@ function render() {
       .lib .cols-pop .col-chk:hover { background: var(--bg); }
       .lib .cols-pop .col-chk input { margin: 0; }
 
-      /* --- modal --- */
+      /* --- modal (no scrim; page stays as it is) --- */
       .lib-modal-scrim {
-        position: fixed; inset: 0; background: rgba(8,10,14,.62);
-        backdrop-filter: blur(10px) saturate(140%);
-        -webkit-backdrop-filter: blur(10px) saturate(140%);
+        position: fixed; inset: 0; background: transparent;
         z-index: 70;
         display: flex; align-items: center; justify-content: center;
         animation: fadeIn var(--dur) var(--ease) both;
       }
-      /* Lock page scroll while a modal is open — fixes the "shady background" wobble */
       html:has(.lib-modal-scrim), body:has(.lib-modal-scrim) { overflow: hidden; }
       .lib-modal {
-        background: var(--paper); border-radius: var(--radius-lg); width: min(760px, 92vw);
-        max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;
-        box-shadow: var(--shadow-pop); animation: rise var(--dur-slow) var(--ease) both;
+        background: var(--paper); border-radius: 18px; width: min(720px, 92vw);
+        max-height: 86vh; display: flex; flex-direction: column; overflow: hidden;
+        box-shadow:
+          0 28px 80px rgba(0,0,0,.22),
+          0 8px 20px rgba(0,0,0,.08),
+          0 0 0 1px var(--line);
+        animation: rise var(--dur-slow) var(--ease) both;
       }
       .lib-modal header {
         flex-shrink: 0;
@@ -370,14 +405,13 @@ function render() {
         text-transform: uppercase; color: var(--mut); margin: var(--s-4) 0 8px;
       }
 
-      /* ---- Polished modal shell ---- */
-      .lib-modal-scrim {
-        backdrop-filter: blur(6px);
-        -webkit-backdrop-filter: blur(6px);
-        background: rgba(10,12,16,.52);
-      }
+      /* ---- Polished modal shell (no backdrop) ---- */
+      .lib-modal-scrim { background: transparent; }
       .lib-modal {
-        box-shadow: 0 32px 80px rgba(0,0,0,.35), 0 0 0 1px var(--line);
+        box-shadow:
+          0 28px 80px rgba(0,0,0,.22),
+          0 8px 20px rgba(0,0,0,.08),
+          0 0 0 1px var(--line);
         border-radius: 18px;
         animation: lmPop 180ms cubic-bezier(.2,1.2,.3,1);
       }
@@ -485,10 +519,14 @@ function paint(root) {
   const statusCol = pickCol(sheet.headers, "status", /^status$/i);
   const patternCol = pickCol(sheet.headers, "pattern", /^(pattern|category)$/i);
   const freqCol = pickCol(sheet.headers, "freq", /^(freq|priority)$/i);
+  const companyCol = sheet.headers.find(h => /^compan(y|ies)$/i.test(h));
 
   const statuses = statusCol ? uniq(sheet.rows.map(r => r[statusCol]).filter(Boolean)) : [];
   const patterns = patternCol ? uniq(sheet.rows.map(r => r[patternCol]).filter(Boolean)) : [];
   const freqs    = freqCol    ? uniq(sheet.rows.map(r => r[freqCol]).filter(Boolean)) : [];
+  const companies = companyCol
+    ? uniq(sheet.rows.flatMap(r => parseCompanies(r[companyCol]))).sort((a, b) => a.localeCompare(b))
+    : [];
 
   const hidden = getHidden(active, sheet.headers);
 
@@ -496,18 +534,40 @@ function paint(root) {
   const chipsEl = root.querySelector("#lib-chips");
   if (chipsEl) {
     const q = filters.quick;
+    const cf = filters.company;
     chipsEl.innerHTML = `
-      <button class="lib-chip ${q === ""?"active":""}" data-quick="">All</button>
-      <button class="lib-chip ${q === "unsolved"?"active":""}" data-quick="unsolved">Unsolved</button>
-      <button class="lib-chip ${q === "solved"?"active":""}" data-quick="solved">Solved</button>
-      <button class="lib-chip ${q === "lowconf"?"active":""}" data-quick="lowconf">Low confidence <span class="lc-dot">◉</span></button>
-      <button class="lib-chip ${q === "solved-today"?"active":""}" data-quick="solved-today">Solved today</button>
-      <button class="lib-chip ${q === "review"?"active":""}" data-quick="review">Needs review</button>
+      <div class="lib-chip-row">
+        <button class="lib-chip ${q === ""?"active":""}" data-quick="">All</button>
+        <button class="lib-chip ${q === "unsolved"?"active":""}" data-quick="unsolved">Unsolved</button>
+        <button class="lib-chip ${q === "solved"?"active":""}" data-quick="solved">Solved</button>
+        <button class="lib-chip ${q === "lowconf"?"active":""}" data-quick="lowconf">Low confidence <span class="lc-dot">◉</span></button>
+        <button class="lib-chip ${q === "solved-today"?"active":""}" data-quick="solved-today">Solved today</button>
+        <button class="lib-chip ${q === "review"?"active":""}" data-quick="review">Needs review</button>
+      </div>
+      ${companies.length ? `
+        <div class="lib-company-row" role="toolbar" aria-label="Filter by company">
+          <button class="lib-cfilter ${cf === "" ? "active" : ""}" data-cfilter="">
+            <span class="cf-all">All companies</span>
+          </button>
+          ${companies.map(c => `
+            <button class="lib-cfilter ${cf === c ? "active" : ""}" data-cfilter="${esc(c)}" title="${esc(c)}">
+              ${companyIconHtml(c, 18)}
+              <span class="cf-name">${esc(c)}</span>
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
     `;
-    chipsEl.querySelectorAll(".lib-chip").forEach(btn => {
+    chipsEl.querySelectorAll("[data-quick]").forEach(btn => {
       btn.addEventListener("click", () => {
         filters.quick = btn.dataset.quick;
-        paint(root);  // re-render chips (for active state) + table
+        paint(root);
+      });
+    });
+    chipsEl.querySelectorAll("[data-cfilter]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        filters.company = btn.dataset.cfilter;
+        paint(root);
       });
     });
   }
@@ -603,6 +663,7 @@ function paintTable(root) {
   const freqCol = pickCol(headers, "freq", /^(freq|priority)$/i);
   const confCol = pickCol(headers, "confidence", /^confidence$/i);
   const dateCol = pickCol(headers, "dateDone", /^(datesolved|datedone)$/i);
+  const companyCol = headers.find(h => /^compan(y|ies)$/i.test(h));
 
   // apply filters
   const q = filters.q.trim().toLowerCase();
@@ -631,6 +692,12 @@ function paintTable(root) {
       if (filters.status && statusCol && String(r[statusCol]||"") !== filters.status) return false;
       if (filters.pattern && patternCol && String(r[patternCol]||"") !== filters.pattern) return false;
       if (filters.freq && freqCol && String(r[freqCol]||"") !== filters.freq) return false;
+      // Company filter — row must include the selected company (case-insensitive)
+      if (filters.company) {
+        if (!companyCol) return false;
+        const rowCos = parseCompanies(r[companyCol]).map(s => s.toLowerCase());
+        if (!rowCos.includes(filters.company.toLowerCase())) return false;
+      }
       if (q) {
         const joined = headers.map(h => String(r[h]||"")).join(" ").toLowerCase();
         if (!joined.includes(q)) return false;
@@ -646,7 +713,7 @@ function paintTable(root) {
       <table>
         <colgroup>
           <col class="c-open" />
-          ${headers.map(h => `<col class="${colClass(h, { statusCol, patternCol, freqCol, confCol, dateCol })}" />`).join("")}
+          ${headers.map(h => `<col class="${colClass(h, { statusCol, patternCol, freqCol, confCol, dateCol, companyCol })}" />`).join("")}
         </colgroup>
         <thead>
           <tr>
@@ -664,7 +731,7 @@ function paintTable(root) {
                 <button class="open-btn" data-open="${i}" aria-label="Open problem" title="Open problem">→</button>
                 <button class="info-btn" data-learn="${i}" aria-label="Learn this topic" title="Teacher-mode lesson (Groq)">ℹ</button>
               </td>
-              ${headers.map(h => renderCell(h, r[h], { statusCol, patternCol, freqCol, confCol, dateCol })).join("")}
+              ${headers.map(h => renderCell(h, r[h], { statusCol, patternCol, freqCol, confCol, dateCol, companyCol })).join("")}
               <td class="del-cell"><button class="del-btn" data-del="${i}" aria-label="Delete row">×</button></td>
             </tr>`;
           }).join("")}
@@ -781,12 +848,23 @@ function colClass(h, cols) {
   if (h === cols.dateCol) return "c-date";
   if (h === cols.freqCol) return "c-freq";
   if (h === cols.patternCol) return "c-pattern";
+  if (h === cols.companyCol) return "c-companies";
   if (/^(problem|topic|skill|skillorplatform|name)$/.test(nh)) return "c-problem";
   if (/^notes?$/.test(nh)) return "c-notes";
   return "c-default";
 }
 
 function renderCell(h, v, cols) {
+  // Companies — array field, chip row with logos; click → edit
+  if (h === cols.companyCol) {
+    const list = String(v || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (!list.length) {
+      return `<td class="co-cell co-cell-empty"><input class="cell-input co-cell-input" data-key="${esc(h)}" data-free="1" placeholder="add companies…" value="" /></td>`;
+    }
+    const chips = list.slice(0, 6).map(c => companyIconHtml(c, 20)).join("");
+    const more = list.length > 6 ? `<span class="co-cell-more">+${list.length - 6}</span>` : "";
+    return `<td class="co-cell"><span class="co-cell-chips">${chips}${more}</span><input class="cell-input co-cell-input" data-key="${esc(h)}" data-free="1" value="${esc(v)}" title="Comma-separated companies" /></td>`;
+  }
   // status select
   if (h === cols.statusCol) {
     const opts = ["TODO", "SOLVED", "REVIEW", "AGAIN"];

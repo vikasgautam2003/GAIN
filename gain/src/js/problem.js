@@ -11,7 +11,7 @@ import { openLessonModal } from "./lesson.js";
 import { infoIcon, renderMarkdown } from "./info.js";
 import { priceTask, todayKey, capTaskValue } from "./engine.js";
 import { fireTaskBagged } from "./celebrate.js";
-import { companyChipHtml } from "./companies.js";
+import { companyChipHtml, injectCompanyStyles } from "./companies.js";
 
 let unsub = null;
 let timerState = null;
@@ -20,6 +20,7 @@ let currentKey = null;
 
 export default {
   mount(root, params) {
+    injectCompanyStyles();
     const sheetName = decodeURIComponent(params[0] || "DSA");
     const idx = Number(params[1] || 0);
     const sheet = getSheets()[sheetName];
@@ -723,8 +724,7 @@ function styles() {
     .prob .pcr-label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
     .prob .pcr-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
     .prob .pcr-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line2); color: var(--ink); font: 600 11.5px/1 var(--font-sans); letter-spacing: .01em; }
-    .prob .pcr-logo { width: 22px; height: 22px; border-radius: 50%; background: var(--bg); object-fit: contain; display: inline-block; flex-shrink: 0; }
-    .prob .pcr-logo-fallback { display: inline-flex; align-items: center; justify-content: center; font: 700 11px/1 var(--font-sans); color: var(--mut); background: var(--bg); }
+    /* Shared .pcr-logo styles live in companies.js injectCompanyStyles() */
     .prob .pcr-name { display: inline-block; }
     .prob .pcr-x { border: none; background: transparent; color: var(--mut); cursor: pointer; font: 400 13px/1 var(--font-sans); padding: 0 2px; transition: color .14s; }
     .prob .pcr-x:hover { color: var(--red); }

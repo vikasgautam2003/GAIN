@@ -148,7 +148,7 @@ function injectStyles() {
   const s = document.createElement("style");
   s.id = "elog-styles";
   s.textContent = `
-    .elog-scrim { position: fixed; inset: 0; z-index: 1400; background: rgba(0,0,0,.55); backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center; padding: 24px; animation: elogFade .2s ease both; }
+    .elog-scrim { position: fixed; inset: 0; z-index: 1400; background: transparent; display: flex; align-items: center; justify-content: center; padding: 24px; animation: elogFade .2s ease both; }
     @keyframes elogFade { from { opacity: 0; } to { opacity: 1; } }
     .elog-modal { background: var(--paper); border: 1px solid var(--line2); border-radius: 14px; padding: 22px 24px; width: 100%; max-width: 480px; box-shadow: 0 24px 60px rgba(0,0,0,.3); animation: elogPop .22s cubic-bezier(.2,1.2,.3,1) both; }
     @keyframes elogPop { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }

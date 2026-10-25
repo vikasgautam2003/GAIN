@@ -9,7 +9,7 @@ import { getSheets, getDayLog, getSettings, getWallet, callGrok, secure, updateD
 import { todayKey, activeKey, priceTask } from "./engine.js";
 import { renderMarkdown } from "./info.js";
 import { callGroqJSON } from "./groqJson.js";
-import { logoUrl as companyLogoUrl, faviconFallback as companyFavicon, parseCompanies } from "./companies.js";
+import { companyIconHtml, injectCompanyStyles, parseCompanies } from "./companies.js";
 
 function renderCompanyMini(p) {
   const sheets = getSheets();
@@ -23,9 +23,7 @@ function renderCompanyMini(p) {
   if (!col) return "";
   const companies = parseCompanies(row[col]).slice(0, 5);
   if (!companies.length) return "";
-  return `<span class="sg-companies">${companies.map(c =>
-    `<span class="sg-company" title="${esc(c)}"><img src="${esc(companyLogoUrl(c, 32))}" alt="${esc(c)}" onerror="this.onerror=null;this.src='${esc(companyFavicon(c, 32))}';" /></span>`
-  ).join("")}</span>`;
+  return `<span class="sg-companies">${companies.map(c => companyIconHtml(c, 22)).join("")}</span>`;
 }
 
 const TOPIC_OPTIONS = [
@@ -39,6 +37,7 @@ const TOPIC_OPTIONS = [
 const DIFFICULTY_OPTIONS = ["Easy", "Medium", "Hard"];
 
 export async function openSuggestModal(root) {
+  injectCompanyStyles();
   document.querySelectorAll(".sg-scrim").forEach(m => m.remove());
 
   const scrim = document.createElement("div");
@@ -583,9 +582,7 @@ function injectStyles() {
   style.textContent = `
     .sg-scrim {
       position: fixed; inset: 0; z-index: 1300;
-      background: rgba(8,10,14,.66);
-      backdrop-filter: blur(10px) saturate(140%);
-      -webkit-backdrop-filter: blur(10px) saturate(140%);
+      background: transparent;
       display: flex; align-items: center; justify-content: center;
       padding: 24px;
       animation: sgFade 220ms ease both;
@@ -593,9 +590,12 @@ function injectStyles() {
     @keyframes sgFade { from { opacity: 0; } to { opacity: 1; } }
     .sg-modal {
       background: var(--paper); border-radius: 20px;
-      width: 100%; max-width: 620px; max-height: 92vh;
+      width: 100%; max-width: 560px; max-height: 84vh;
       display: flex; flex-direction: column; overflow: hidden;
-      box-shadow: 0 32px 80px rgba(0,0,0,.4), 0 0 0 1px var(--line);
+      box-shadow:
+        0 28px 80px rgba(0,0,0,.22),
+        0 8px 20px rgba(0,0,0,.08),
+        0 0 0 1px var(--line);
       animation: sgPop 240ms cubic-bezier(.2,1.2,.3,1) both;
     }
     @keyframes sgPop {
@@ -708,8 +708,7 @@ function injectStyles() {
     }
     .sg-pick-sub { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .sg-companies { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
-    .sg-company { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; overflow: hidden; background: #fff; border: 1px solid var(--line); flex-shrink: 0; }
-    .sg-company img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .sg-companies .co-ico { border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.05); }
     .sg-chip-mini {
       padding: 5px 10px; border-radius: 7px;
       font: 600 11.5px/1.3 var(--font-sans); letter-spacing: .02em;

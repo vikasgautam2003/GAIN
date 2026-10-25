@@ -205,7 +205,7 @@ function injectStyles() {
   const s = document.createElement("style");
   s.id = "eb-styles";
   s.textContent = `
-    .eb-scrim { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,.6); backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center; padding: 24px; animation: ebFade .22s ease both; }
+    .eb-scrim { position: fixed; inset: 0; z-index: 1500; background: transparent; display: flex; align-items: center; justify-content: center; padding: 24px; animation: ebFade .22s ease both; }
     @keyframes ebFade { from { opacity: 0; } to { opacity: 1; } }
     .eb-modal { background: var(--paper); border: 1px solid var(--line2); border-radius: 16px; width: 100%; max-width: 640px; max-height: 92vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 32px 80px rgba(0,0,0,.3); animation: ebPop .25s cubic-bezier(.2,1.2,.3,1) both; }
     @keyframes ebPop { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }

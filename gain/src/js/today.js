@@ -9,6 +9,7 @@ import { openLessonModal } from "./lesson.js";
 import { openSuggestModal } from "./suggest.js";
 import { infoIcon } from "./info.js";
 import { fireDaySecured, fireWeekGodly, fireMonthLegend, fireTaskBagged } from "./celebrate.js";
+import { companyIconHtml as _companyIconHtml, injectCompanyStyles } from "./companies.js";
 
 function pickRandom() {
   const pool = getMotivations();
@@ -21,6 +22,7 @@ let quoteTimer = null;
 
 export default {
   async mount(root) {
+    injectCompanyStyles();
     const s = getSettings();
     const sheets = getSheets();
     const dsa = sheets["DSA"] || { rows: [] };
@@ -1899,35 +1901,7 @@ function companyChipsFor(t) {
   if (!col || !row[col]) return "";
   const companies = String(row[col]).split(",").map(s => s.trim()).filter(Boolean).slice(0, 5);
   if (!companies.length) return "";
-  return `<span class="task-companies">${companies.map(c =>
-    `<span class="task-company" title="${esc(c)}"><img src="${esc(logoUrlFor(c, 32))}" alt="${esc(c)}" onerror="this.onerror=null;this.src='${esc(faviconFor(c, 32))}';" /></span>`
-  ).join("")}</span>`;
-}
-
-// Lightweight local versions of logoUrl / favicon so today.js stays import-light.
-function logoUrlFor(name, size) {
-  const d = _domainFor(name);
-  return d ? `https://logo.clearbit.com/${d}?size=${size}` : "";
-}
-function faviconFor(name, size) {
-  const d = _domainFor(name);
-  return d ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=${size * 2}` : "";
-}
-const _COMPANY_DOMAINS = {
-  google:"google.com",meta:"meta.com",facebook:"meta.com",amazon:"amazon.com",apple:"apple.com",microsoft:"microsoft.com",
-  palantir:"palantir.com",netflix:"netflix.com",uber:"uber.com",stripe:"stripe.com",linear:"linear.app",openai:"openai.com",
-  anthropic:"anthropic.com",tesla:"tesla.com",nvidia:"nvidia.com",airbnb:"airbnb.com",linkedin:"linkedin.com",atlassian:"atlassian.com",
-  oracle:"oracle.com",ibm:"ibm.com",intel:"intel.com",cisco:"cisco.com",cloudflare:"cloudflare.com",notion:"notion.so",figma:"figma.com",
-  slack:"slack.com",github:"github.com",dropbox:"dropbox.com",snap:"snap.com",x:"x.com",twitter:"twitter.com",tiktok:"tiktok.com",
-  bytedance:"bytedance.com",pinterest:"pinterest.com",doordash:"doordash.com",instacart:"instacart.com",zoom:"zoom.us",
-  rocketlane:"rocketlane.com",
-};
-function _domainFor(name) {
-  if (!name) return "";
-  const n = String(name).toLowerCase().trim();
-  if (_COMPANY_DOMAINS[n]) return _COMPANY_DOMAINS[n];
-  const slug = n.replace(/\s+/g, "").replace(/[^a-z0-9-]/g, "");
-  return slug ? `${slug}.com` : "";
+  return `<span class="task-companies">${companies.map(c => _companyIconHtml(c, 22)).join("")}</span>`;
 }
 function badgeFor(t) {
   // Note: difficulty for DSA now lives in a hover-chip, not the badge.
@@ -3036,19 +3010,14 @@ function styles() {
     .today .task-row:focus-within .hover-chips {
       opacity: 1; transform: translateX(0);
     }
-    /* Company logo mini-chips — always visible on task rows */
+    /* Company logo mini-chips — always visible on task rows (icons from companies.js) */
     .today .task-companies {
-      display: inline-flex; align-items: center; gap: 3px;
-      margin-left: 6px; flex-shrink: 0;
+      display: inline-flex; align-items: center; gap: 4px;
+      margin-left: 8px; flex-shrink: 0;
     }
-    .today .task-company {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 20px; height: 20px; border-radius: 50%;
-      overflow: hidden;
-      background: #fff; border: 1px solid var(--line);
-      flex-shrink: 0; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    .today .task-companies .co-ico {
+      border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.04);
     }
-    .today .task-company img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .today .hover-chip {
       padding: 2px 8px; border-radius: 6px;
       font: 600 10.5px/1.3 var(--font-sans);

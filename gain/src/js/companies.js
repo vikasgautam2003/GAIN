@@ -102,32 +102,88 @@ export function domainForCompany(name) {
   return slug ? `${slug}.com` : "";
 }
 
-// Public logo URL. Clearbit for cleaner-brand lookups; favicon fallback via
-// Google S2 service (used as the <img> `onerror` fallback inline).
-export function logoUrl(name, size = 32) {
+// Public logo URL — Google S2 favicon service (reliable, free, no API key, no
+// rate limit at this volume). Clearbit's logo API was deprecated/unreliable in
+// 2024, so we switched everything to S2. For a 20-28px display the 64px
+// request is sharp enough.
+export function logoUrl(name, size = 64) {
   const domain = domainForCompany(name);
   if (!domain) return "";
-  return `https://logo.clearbit.com/${domain}?size=${size}`;
+  // sz hint is a request; Google decides what to actually serve.
+  const px = size <= 32 ? 64 : size <= 48 ? 96 : 128;
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=${px}`;
 }
+// Kept for callers; same source now (Clearbit was dead).
 export function faviconFallback(name, size = 32) {
-  const domain = domainForCompany(name);
-  if (!domain) return "";
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=${size * 2}`;
+  return logoUrl(name, size);
 }
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
 }
 
-// Pretty chip HTML with company logo + name. If removable, adds an × button.
+// A deterministic hue per company so the letter-avatar fallback has colour.
+function hueFor(name) {
+  let h = 0;
+  const s = String(name || "").toLowerCase();
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+// Pretty chip HTML with company logo + name. The chip is a letter-avatar
+// (always drawn in a colored circle) with the <img> stacked on top. If the
+// image loads, it covers the letter. If it fails, onerror hides it and the
+// letter underneath becomes the fallback automatically — no second network
+// request, no broken-image icon.
 export function companyChipHtml(name, removable = false) {
-  const logo = logoUrl(name, 32);
-  const fallback = faviconFallback(name, 32);
+  const logo = logoUrl(name, 64);
+  const hue = hueFor(name);
+  const letter = esc((name || "·").slice(0, 1).toUpperCase());
   return `<span class="pcr-chip" data-c="${esc(name)}">
-    ${logo ? `<img class="pcr-logo" src="${esc(logo)}" alt="" onerror="this.onerror=null;this.src='${esc(fallback)}';" />` : `<span class="pcr-logo pcr-logo-fallback">${esc(name.slice(0, 1).toUpperCase())}</span>`}
+    <span class="pcr-logo" style="background:hsl(${hue} 65% 48%);" data-letter="${letter}">
+      ${logo ? `<img src="${esc(logo)}" alt="" onerror="this.style.display='none'" />` : ""}
+    </span>
     <span class="pcr-name">${esc(name)}</span>
     ${removable ? `<button class="pcr-x" aria-label="Remove ${esc(name)}">×</button>` : ""}
   </span>`;
+}
+
+// Compact logo-only chip. Same stack-on-letter technique, no fallback request.
+export function companyIconHtml(name, px = 22) {
+  const logo = logoUrl(name, 64);
+  const hue = hueFor(name);
+  const letter = esc((name || "·").slice(0, 1).toUpperCase());
+  return `<span class="co-ico" title="${esc(name)}" style="width:${px}px;height:${px}px;background:hsl(${hue} 65% 48%);font-size:${Math.max(10, Math.round(px * 0.55))}px;" data-letter="${letter}">
+    ${logo ? `<img src="${esc(logo)}" alt="${esc(name)}" onerror="this.style.display='none'" />` : ""}
+  </span>`;
+}
+
+// A single <style> block that every page can include once to style the
+// stacked-icon pattern consistently. Call injectCompanyStyles() on page mount.
+export function injectCompanyStyles() {
+  if (document.getElementById("company-shared-styles")) return;
+  const s = document.createElement("style");
+  s.id = "company-shared-styles";
+  s.textContent = `
+    .co-ico {
+      position: relative; display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 50%; overflow: hidden; color: #fff; font-weight: 700; letter-spacing: 0;
+      flex-shrink: 0; vertical-align: middle; line-height: 1;
+    }
+    .co-ico::before { content: attr(data-letter); position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center; z-index: 0; }
+    .co-ico img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain;
+      display: block; background: #fff; padding: 2px; border-radius: inherit; }
+    /* pcr-logo (problem-page chip editor) also uses the stacked approach */
+    .pcr-logo { position: relative; width: 22px; height: 22px; border-radius: 50%; overflow: hidden;
+      color: #fff; font: 700 11px/1 var(--font-sans); display: inline-flex; align-items: center;
+      justify-content: center; flex-shrink: 0; }
+    .pcr-logo::before { content: attr(data-letter); position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center; z-index: 0; }
+    .pcr-logo img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain;
+      background: #fff; padding: 2px; border-radius: inherit; display: block; }
+  `;
+  document.head.appendChild(s);
 }
 
 // Parse a comma-separated list from a sheet row's Companies column.
