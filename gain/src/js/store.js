@@ -200,6 +200,7 @@ const state = {
   weeklyPlan: null,   // last saved weekly plan (see applyWeeklyPlan)
   solutions: {},      // { "DSA#86": "code...", ... } — problem-page solutions keyed by sheet#rowIndex
   recreations: [],    // Chill Hideout — user-curated escape sites
+  collections: [],    // Chill Hideout — user-curated collections (Comics / Novels / etc)
   booted: false,
   listeners: new Set()
 };
@@ -259,11 +260,23 @@ export async function boot() {
     const raw = await readIfExists("solutions.json");
     if (raw) state.solutions = JSON.parse(raw) || {};
   } catch (e) { console.warn("solutions load fallback", e); }
-  // Chill Hideout — user's escape-site list
+  // Chill Hideout — user's escape-site list + collections
   try {
     const raw = await readIfExists("recreations.json");
     if (raw) state.recreations = JSON.parse(raw) || [];
   } catch (e) { console.warn("recreations load fallback", e); }
+  try {
+    const raw = await readIfExists("collections.json");
+    if (raw) state.collections = JSON.parse(raw) || [];
+  } catch (e) { console.warn("collections load fallback", e); }
+  // First-run seed: Comics / Novels / YouTube
+  if (!state.collections.length) {
+    state.collections = [
+      { id: "col_comics",  name: "Comics",  accent: "#ff8aa8", coverImage: "", description: "Panels and arcs. Places to drift between chapters.", createdAt: Date.now() },
+      { id: "col_novels",  name: "Novels",  accent: "#ffd45e", coverImage: "", description: "Long reads worth coming back to.", createdAt: Date.now() + 1 },
+      { id: "col_youtube", name: "YouTube", accent: "#ff5e5e", coverImage: "", description: "Faces and channels you escape with.", createdAt: Date.now() + 2 },
+    ];
+  }
   // motivations — seeds always come from the code bank; only `user` persists.
   try {
     const raw = await readIfExists("motivations.json");
@@ -1274,6 +1287,43 @@ export async function setSolution(sheetName, rowIndex, text) {
 async function persistRecreations() {
   await writeFile("recreations.json", JSON.stringify(state.recreations, null, 2));
 }
+async function persistCollections() {
+  await writeFile("collections.json", JSON.stringify(state.collections, null, 2));
+}
+
+// ---- Collections CRUD ----
+export function getCollections() { return state.collections; }
+
+export async function addCollection(col) {
+  const id = "col_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  state.collections.push({
+    id,
+    name: String(col.name || "Untitled").trim(),
+    accent: String(col.accent || "#c9a9ff").trim(),
+    coverImage: String(col.coverImage || "").trim(),
+    description: String(col.description || "").trim(),
+    createdAt: Date.now(),
+  });
+  schedule("collections", persistCollections);
+  emit("collections");
+  return id;
+}
+export async function updateCollection(id, patch) {
+  const c = state.collections.find(x => x.id === id);
+  if (!c) return;
+  Object.assign(c, patch);
+  schedule("collections", persistCollections);
+  emit("collections");
+}
+export async function deleteCollection(id) {
+  state.collections = state.collections.filter(x => x.id !== id);
+  // Sites in that collection lose their collectionId (go to Uncategorized)
+  for (const r of state.recreations) if (r.collectionId === id) r.collectionId = "";
+  schedule("collections", persistCollections);
+  schedule("recreations", persistRecreations);
+  emit("collections");
+  emit("recreations");
+}
 
 // ---- Chill Hideout: CRUD on the escape-site list ----
 export function getRecreations() { return state.recreations; }
@@ -1286,9 +1336,11 @@ export async function addRecreation(rec) {
     url: String(rec.url || "").trim(),
     title: String(rec.title || "").trim(),
     category: String(rec.category || "web"),
+    collectionId: String(rec.collectionId || "").trim(),
     note: String(rec.note || "").trim().slice(0, 120),
     emoji: String(rec.emoji || "").trim(),
     imageUrl: String(rec.imageUrl || "").trim(),
+    coverImage: String(rec.coverImage || "").trim(),  // user-uploaded override
     browser: String(rec.browser || "").trim(),
     mood: String(rec.mood || "").trim(),       // "chill" | "laugh" | "focus" | "energize" | ""
     journal: [],                                 // [{at: ms, note: string}]
@@ -1382,6 +1434,7 @@ window.__GAIN__ = {
   updateSettings, updateWallet, updateDayLog, updateSheetRow,
   addSheet, removeSheet, callGrok, serpSearch, youtubeSearch, secure, boot,
   getRecreations, addRecreation, updateRecreation, deleteRecreation, bumpRecreationOpened, openRecreation, fetchUrlPreview, addRecreationJournal, markRecreationVisitStart,
+  getCollections, addCollection, updateCollection, deleteCollection,
   getMotivations, getMotivationCounts, addMotivations, clearUserMotivations,
   getShopQuotes, getShopQuoteCounts, getShopQuote, addShopQuotes, clearUserShopQuotes,
   getRewards, addReward, updateReward, removeReward,
