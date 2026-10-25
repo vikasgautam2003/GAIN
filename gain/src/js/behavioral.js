@@ -350,13 +350,7 @@ function wirePanel(root, panel) {
 
   // Prompts tab
   panel.querySelector("#behav-new-prompt")?.addEventListener("click", () => {
-    const title = prompt("Add a BQ prompt (the question an interviewer asks):");
-    if (!title) return;
-    const tag = prompt(`Which tag? (${TAGS.map(t => t.id).join(", ")})`) || TAGS[0].id;
-    const prompts = loadPrompts();
-    prompts.push({ id: `p-${Date.now()}`, title: title.trim(), tag: tag.trim() });
-    savePrompts(prompts);
-    paint(root);
+    openPromptEditor(root, null);
   });
   panel.querySelectorAll("[data-prompt-id]").forEach(card => {
     const id = card.dataset.promptId;
@@ -364,19 +358,61 @@ function wirePanel(root, panel) {
       const prompts = loadPrompts();
       const p = prompts.find(x => x.id === id);
       if (!p) return;
-      const newTitle = prompt("Edit prompt text:", p.title);
-      if (newTitle == null) return;
-      const newTag = prompt(`Tag? (${TAGS.map(t => t.id).join(", ")})`, p.tag) || p.tag;
-      p.title = newTitle.trim();
-      p.tag = newTag.trim();
-      savePrompts(prompts);
-      paint(root);
+      openPromptEditor(root, p);
     });
     card.querySelector("[data-act=prompt-delete]")?.addEventListener("click", () => {
-      if (!confirm("Delete this prompt?")) return;
+      if (!window.confirm("Delete this prompt?")) return;
       savePrompts(loadPrompts().filter(p => p.id !== id));
       paint(root);
     });
+  });
+}
+
+// Dedicated inline editor overlay for BQ prompts. Tauri's WKWebView disables
+// window.prompt() so we ship our own tiny portal with proper inputs.
+function openPromptEditor(root, existing) {
+  document.querySelectorAll(".behav-pe-scrim").forEach(s => s.remove());
+  const scrim = document.createElement("div");
+  scrim.className = "behav-pe-scrim";
+  scrim.innerHTML = `
+    <div class="behav-pe">
+      <header><h3>${existing ? "Edit prompt" : "Add a BQ prompt"}</h3></header>
+      <div class="behav-pe-body">
+        <label class="behav-pe-label">Question</label>
+        <textarea id="behav-pe-title" rows="3" placeholder="Tell me about a time you dealt with ambiguity.">${esc(existing?.title || "")}</textarea>
+        <label class="behav-pe-label">Tag</label>
+        <select id="behav-pe-tag">
+          ${TAGS.map(t => `<option value="${esc(t.id)}" ${(existing?.tag || TAGS[0].id) === t.id ? "selected" : ""}>${esc(t.label)}</option>`).join("")}
+        </select>
+      </div>
+      <footer>
+        <button class="behav-btn-ghost" id="behav-pe-cancel">Cancel</button>
+        <button class="behav-btn-primary" id="behav-pe-save">Save</button>
+      </footer>
+    </div>
+  `;
+  document.body.appendChild(scrim);
+  const close = () => scrim.remove();
+  scrim.querySelector("#behav-pe-cancel")?.addEventListener("click", close);
+  scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+  const escH = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", escH); } };
+  document.addEventListener("keydown", escH);
+  // Focus the textarea
+  setTimeout(() => scrim.querySelector("#behav-pe-title")?.focus(), 0);
+  scrim.querySelector("#behav-pe-save")?.addEventListener("click", () => {
+    const title = scrim.querySelector("#behav-pe-title").value.trim();
+    const tag = scrim.querySelector("#behav-pe-tag").value;
+    if (!title) { scrim.querySelector("#behav-pe-title").focus(); return; }
+    const prompts = loadPrompts();
+    if (existing) {
+      const idx = prompts.findIndex(p => p.id === existing.id);
+      if (idx >= 0) { prompts[idx] = { ...prompts[idx], title, tag }; }
+    } else {
+      prompts.push({ id: `p-${Date.now()}`, title, tag });
+    }
+    savePrompts(prompts);
+    close();
+    paint(root);
   });
 }
 
@@ -606,6 +642,35 @@ function injectStyles() {
     .behav-nb-ptag { padding: 12px 14px; background: var(--paper); border: 1px solid var(--line); border-radius: 12px; }
     .behav-nb-ptag ul { margin: 10px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
     .behav-nb-ptag li { font: 500 13px/1.5 var(--font-sans); color: var(--ink); }
+
+    /* Prompt editor overlay */
+    .behav-pe-scrim {
+      position: fixed; inset: 0; z-index: 1750;
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+      background: transparent;
+    }
+    .behav-pe {
+      background: var(--paper); border-radius: 16px; width: 100%; max-width: 480px;
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow:
+        0 28px 70px rgba(0,0,0,.22),
+        0 8px 20px rgba(0,0,0,.08),
+        0 0 0 1px var(--line);
+      animation: bpePop .22s cubic-bezier(.2,1.2,.3,1) both;
+    }
+    @keyframes bpePop { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .behav-pe header { padding: 18px 22px 10px; border-bottom: 1px solid var(--line); }
+    .behav-pe header h3 { margin: 0; font: 600 17px/1.3 var(--font-sans); color: var(--ink); letter-spacing: -.012em; }
+    .behav-pe-body { padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; }
+    .behav-pe-label { font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); margin-top: 4px; }
+    .behav-pe textarea, .behav-pe select {
+      width: 100%; padding: 10px 12px; border-radius: 10px;
+      border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+      font: 500 13px/1.55 var(--font-sans); letter-spacing: -.005em;
+      resize: vertical; min-height: 36px;
+    }
+    .behav-pe textarea:focus, .behav-pe select:focus { outline: 2px solid var(--gold); outline-offset: -2px; }
+    .behav-pe footer { padding: 14px 22px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
   `;
   document.head.appendChild(s);
 }

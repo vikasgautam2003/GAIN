@@ -714,6 +714,23 @@ function paintPlan(root) {
     });
   });
 
+  // 🎭 Disguise chip → open the disguise drill for this problem
+  rowsEl.querySelectorAll(".hc-disguise").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const { openDisguiseDrill } = await import("./disguise.js");
+      openDisguiseDrill({
+        title: btn.dataset.disguiseTitle || "Problem",
+        pattern: btn.dataset.disguisePattern || "",
+        difficulty: btn.dataset.disguiseDiff || "",
+        kind: btn.dataset.disguiseKind || "dsa",
+        sheetName: btn.dataset.disguiseSheet || "",
+        rowIndex: Number(btn.dataset.disguiseRow),
+      });
+    });
+  });
+
   // Click anywhere on the task row (except interactive bits) also toggles.
   // EXCEPTION: done rows require an explicit checkbox or ✕ click — their row-wide
   // area is "sealed" (per user request: once done, only checkbox or × are active).
@@ -724,7 +741,7 @@ function paintPlan(root) {
       if (e.target.closest(".badge, .chev, .coin-val")) return;
       if (e.target.closest(".confidence-prompt, .star")) return;  // let stars handle their own clicks
       if (e.target.closest(".wu-start-btn, .wu-card-ico")) return;
-      if (e.target.closest(".hc-learn, .hover-chip")) return;      // chips are their own interactions
+      if (e.target.closest(".hc-learn, .hc-disguise, .hover-chip")) return;      // chips are their own interactions
       if (e.target.closest(".task-timer")) return;                  // timer button has its own handler
       if (e.target.closest(".review-strip, .review-set")) return;   // review chips have their own
       // Done rows: no row-wide untick. Must click the actual checkbox or ×.
@@ -2155,9 +2172,10 @@ function chipsFor(t) {
   }
   if (t.lc) bits.push(`<span class="hover-chip hc-lc">LC&nbsp;#${esc(String(t.lc))}</span>`);
   if (t.freq && t.freq.toUpperCase() === "HIGH") bits.push(`<span class="hover-chip hc-freq">HIGH</span>`);
-  // "Learn this topic" chip — only for sheet-linked rows (DSA/SD/Int/Ext/SQL)
+  // "Learn this topic" chip — only for sheet-linked rows (DSA/SD/Int/Ext/SQL/OS)
   if (t.sheet && t.rowIndex != null && t.kind !== "warmup") {
     bits.push(`<button class="hover-chip hc-learn" data-learn-sheet="${esc(t.sheet)}" data-learn-row="${esc(String(t.rowIndex))}" title="Teacher-mode lesson (Groq)">✦ Learn</button>`);
+    bits.push(`<button class="hover-chip hc-disguise" data-disguise-sheet="${esc(t.sheet)}" data-disguise-row="${esc(String(t.rowIndex))}" data-disguise-title="${esc(t.title)}" data-disguise-pattern="${esc(t.pattern || "")}" data-disguise-diff="${esc(t.difficulty || "")}" data-disguise-kind="${esc(t.kind || "")}" title="See 3 disguised real-world versions of this problem (Groq)">🎭 Disguises</button>`);
   }
   return bits.join("");
 }
@@ -3315,6 +3333,22 @@ function styles() {
     .today .hover-chip.hc-learn:hover {
       background: color-mix(in oklab, var(--gold) 18%, transparent);
       border-color: var(--gold);
+      transform: translateY(-1px);
+    }
+
+    /* 🎭 Disguise chip — same hover-reveal mechanic as Learn, red accent */
+    .today .task-row:hover .hover-chip.hc-disguise,
+    .today .task-row:focus-within .hover-chip.hc-disguise {
+      pointer-events: auto;
+    }
+    .today .hover-chip.hc-disguise {
+      cursor: pointer; font: 600 10.5px/1.3 var(--font-sans);
+      color: #8b4bff; background: color-mix(in oklab, #8b4bff 10%, transparent);
+      border-color: color-mix(in oklab, #8b4bff 22%, transparent);
+    }
+    .today .hover-chip.hc-disguise:hover {
+      background: color-mix(in oklab, #8b4bff 20%, transparent);
+      border-color: #8b4bff;
       transform: translateY(-1px);
     }
 

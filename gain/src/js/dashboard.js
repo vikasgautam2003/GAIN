@@ -432,28 +432,25 @@ function paintExplainBackTile(root) {
 
 async function paintFocusTile(root) {
   try {
-    const { getCurrentFocus, listFocusPatterns, setFocusOverride } = await import("./weeklyFocus.js");
+    const { getCurrentFocus, openFocusEditor } = await import("./weeklyFocus.js");
     const current = await getCurrentFocus();
     const sub = root.querySelector("#focus-tile-sub");
     const nameEl = root.querySelector("#focus-tile-name");
     const changeBtn = root.querySelector("#focus-tile-change");
     if (!current) {
       if (nameEl) nameEl.textContent = "No pattern set";
-      if (sub) sub.textContent = "Add patterns in Settings";
-      return;
+      if (sub) sub.textContent = "Click Change to add patterns";
+    } else {
+      if (nameEl) nameEl.textContent = current;
+      if (sub) sub.textContent = "Suggest + Warmup bias toward this for 7 days";
     }
-    if (nameEl) nameEl.textContent = current;
-    if (sub) sub.textContent = "Suggest + Warmup bias toward this for 7 days";
-    changeBtn?.addEventListener("click", () => {
-      const list = listFocusPatterns();
-      if (!list.length) { alert("Add patterns in Settings → Schedule → Pattern of the week."); return; }
-      const choice = prompt("Pick this week's focus pattern:\n\n" + list.map((p, i) => `${i+1}. ${p}`).join("\n") + "\n\nType a number or the exact pattern name:", current);
-      if (!choice) return;
-      const idx = parseInt(choice, 10);
-      const pick = Number.isInteger(idx) && idx >= 1 && idx <= list.length ? list[idx - 1] : choice.trim();
-      if (!pick) return;
-      setFocusOverride(pick).then(() => paintFocusTile(root));
-    });
+    if (changeBtn && !changeBtn._wfBound) {
+      changeBtn._wfBound = true;
+      changeBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        openFocusEditor(() => paintFocusTile(root));
+      });
+    }
   } catch (e) {
     console.warn("[focus tile] failed", e);
   }

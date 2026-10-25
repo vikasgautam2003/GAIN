@@ -434,12 +434,12 @@ export function getDueRevisits(dateKey) {
   dueNow.sort((a, b) => a.conf - b.conf || a.date.localeCompare(b.date));
 
   // Cap daily revisits. The new SRS layer uses a percentage of the daily plan
-  // size (default 40%) so new study always has slots. Falls back to a hard
-  // minimum of 3 if the user hasn't tuned the setting.
+  // size (default 40%) so new study always has slots. maxTasksPerDay is the
+  // user's hard cap, so we size the review share off that.
   const settings = getSettings();
   const schedule = settings?.schedule || {};
   const pct = typeof schedule.revisitCapPct === "number" ? schedule.revisitCapPct : 40;
-  const dailySize = Math.max(3, (schedule.newDsaPerWeekday || 1) + (schedule.sdPerWeek || 0) + (schedule.intPerWeek || 0) + 2);
+  const dailySize = Math.max(3, schedule.maxTasksPerDay || 5);
   const dynamicCap = Math.max(1, Math.round(dailySize * (pct / 100)));
   let picks = dueNow.slice(0, dynamicCap);
 

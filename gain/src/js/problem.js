@@ -63,8 +63,7 @@ export default {
       sheetName, idx, title, difficulty, lcValue, pattern, freq, status, confidence,
       value, notes, solution
     });
-    attach(root, { sheetName, idx, row, value, lcCol: lcCol || "LC#", linkCol, notesCol, solCol, confCol, statusCol });
-    startTimer(root, 25 * 60);
+    attach(root, { sheetName, idx, row, value, lcCol: lcCol || "LC#", linkCol, notesCol, solCol, confCol, statusCol, pattern, title, difficulty });
 
     if (unsub) unsub();
     unsub = on(() => {});
@@ -228,7 +227,7 @@ function resolveLink(lcValue, title) {
   return `https://leetcode.com/problems/${slugify(lcValue)}/`;
 }
 
-function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, solCol, confCol, statusCol }) {
+function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, solCol, confCol, statusCol, pattern, title, difficulty }) {
   // --- Learn this topic — Groq lesson modal, cached per row ---
   root.querySelector("#pl-open")?.addEventListener("click", () => {
     openLessonModal({ sheetName, rowIndex: idx });
