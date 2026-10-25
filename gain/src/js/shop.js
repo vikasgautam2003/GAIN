@@ -1766,8 +1766,16 @@ function styles() {
       cursor: pointer; transition: all .18s;
     }
     .shop .shop-add-btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
-    .shop .import-hint { font-size: 11px; color: var(--mut); letter-spacing: 0; }
-    .shop .import-hint code { background: #f3f4f6; padding: 1px 6px; border-radius: 4px; font-size: 10.5px; color: var(--ink); }
+    .shop .import-hint { font-size: 12px; color: var(--mut); letter-spacing: 0; display: block; margin-top: 6px; line-height: 1.5; }
+    .shop .import-hint code {
+      display: inline-block; max-width: 100%; overflow-x: auto; white-space: nowrap;
+      vertical-align: middle;
+      background: var(--bg); border: 1px solid var(--line);
+      padding: 3px 8px; border-radius: 5px;
+      font: 500 11px/1.4 var(--font-mono, ui-monospace,SFMono-Regular,Menlo,monospace);
+      color: var(--ink); letter-spacing: 0;
+    }
+    .shop .import-hint code::-webkit-scrollbar { height: 4px; }
 
     /* ---- Add hub (picker) modal ---- */
     .shop-hub-scrim {

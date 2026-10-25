@@ -169,12 +169,12 @@ function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
               <div class="add-field">
                 <label>Kind</label>
                 <select id="at-kind">
-                  <option value="dsa">DSA problem</option>
+                  <option value="dsa" selected>DSA problem</option>
                   <option value="sql">SQL problem</option>
                   <option value="sd">System design</option>
                   <option value="int">Integration</option>
                   <option value="ext">Interview extra</option>
-                  <option value="revision" selected>Revision / quick</option>
+                  <option value="revision">Revision / quick</option>
                   <option value="log">Log / housekeeping</option>
                 </select>
               </div>
@@ -1545,8 +1545,8 @@ function attachHandlers(root) {
       value = Number(addEx.hidden ? pickedMatch.bounty : (root.querySelector("#at-value")?.value || pickedMatch.bounty));
       preDone = !addEx.hidden && root.querySelector("#at-status")?.value === "done";
     } else {
-      kind = addEx.hidden ? "revision" : (root.querySelector("#at-kind")?.value || "revision");
-      minutes = Number(addEx.hidden ? 15 : (root.querySelector("#at-min")?.value || 15));
+      kind = addEx.hidden ? "dsa" : (root.querySelector("#at-kind")?.value || "dsa");
+      minutes = Number(addEx.hidden ? 25 : (root.querySelector("#at-min")?.value || 25));
       value = Number(addEx.hidden ? getSettings().wallet.taskMin : (root.querySelector("#at-value")?.value || getSettings().wallet.taskMin));
       preDone = !addEx.hidden && root.querySelector("#at-status")?.value === "done";
       const mapped = KIND_TO_SHEET[kind];

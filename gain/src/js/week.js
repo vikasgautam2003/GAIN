@@ -660,7 +660,19 @@ function styles() {
       transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
     }
     .week .day:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); }
-    .week .day.weekend { background: linear-gradient(135deg, #fff8ea, var(--paper)); border-color: #f3dfa6; }
+    .week .day.weekend {
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 12%, var(--paper)), var(--paper));
+      border-color: color-mix(in oklab, var(--gold) 32%, var(--line));
+    }
+    .week .day.weekend .day-name,
+    .week .day.weekend .day-date,
+    .week .day.weekend .dot,
+    .week .day.weekend .day-task .t,
+    .week .day.weekend .day-task .m,
+    .week .day.weekend .day-task-val,
+    .week .day.weekend .day-foot,
+    .week .day.weekend .day-task-meta { color: var(--ink); }
+    .week .day.weekend .day-task { border-color: color-mix(in oklab, var(--gold) 24%, var(--line)); }
     .week .day-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--s-3); }
     .week .day-name { font: 800 13px/1 var(--font-sans); letter-spacing: .08em; color: var(--ink); }
     .week .day-date { font-size: 10px; color: var(--mut); margin-top: 4px; letter-spacing: .05em; }

@@ -547,16 +547,16 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
         max-width: 820px; margin: 0 auto;
       }
       .settings .s-eyebrow {
-        font: 700 11px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase;
-        color: var(--gold); margin: 0 0 12px;
+        font: 700 13px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase;
+        color: var(--gold); margin: 0 0 14px;
       }
       .settings .s-title {
-        font: 600 44px/1.06 var(--font-sans); letter-spacing: -.028em;
-        margin: 0 0 12px; color: var(--ink);
+        font: 600 52px/1.06 var(--font-sans); letter-spacing: -.028em;
+        margin: 0 0 14px; color: var(--ink);
       }
       .settings .s-lede {
-        font-size: 15px; color: var(--mut); margin: 0 auto;
-        max-width: 540px; line-height: 1.5;
+        font-size: 18px; color: var(--mut); margin: 0 auto;
+        max-width: 620px; line-height: 1.55;
       }
       .settings .s-glossary-btn {
         display: inline-flex; align-items: center; gap: 8px;
@@ -602,7 +602,7 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
         flex-shrink: 0;
       }
       .settings .stb-chip:hover { color: var(--ink); background: var(--bg); }
-      .settings .stb-chip.active { background: var(--ink); color: #fff; }
+      .settings .stb-chip.active { background: var(--ink); color: var(--paper); }
 
       /* ===== Sections: NO cards, continuous luxurious scroll — WIDER for breathing room ===== */
       .settings .s-layout { display: block; max-width: 940px; margin: 0 auto; padding: 0 24px; }
@@ -615,7 +615,10 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
       }
       .settings .s-card:first-of-type { border-top: none; padding-top: 24px; }
       .settings .s-card:last-of-type  { padding-bottom: 32px; }
-      .settings .s-card label { font-size: 14px; }
+      /* 1.5x type scale pass — labels, inputs, notes feel generous now */
+      .settings .s-card label { font-size: 16px; }
+      .settings .s-card input, .settings .s-card select, .settings .s-card textarea { font-size: 15px; padding: 10px 12px; }
+      .settings .s-card select { padding-right: 32px; }
       .settings .s-card input[type="text"],
       .settings .s-card input[type="password"],
       .settings .s-card input[type="number"],
@@ -645,20 +648,20 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
       }
       .settings .s-head h3 {
         margin: 0;
-        font: 600 24px/1.2 var(--font-sans); letter-spacing: -.02em;
+        font: 600 30px/1.2 var(--font-sans); letter-spacing: -.02em;
         color: var(--ink);
-        display: flex; align-items: center; gap: 12px;
+        display: flex; align-items: center; gap: 14px;
       }
-      .settings .h-ic { display: none; }   /* no colored squares; the heading alone leads */
-      .settings .s-head::before { display: none; }  /* no colored dot */
+      .settings .h-ic { display: none; }
+      .settings .s-head::before { display: none; }
       .settings .s-tag {
         display: block;
-        color: var(--mut); font: 400 13px/1.4 var(--font-sans);
-        margin-top: 4px;
+        color: var(--mut); font: 400 15px/1.4 var(--font-sans);
+        margin-top: 6px;
       }
 
-      .settings .s-note { color: var(--mut); font-size: 13.5px; margin: 0 0 24px; line-height: 1.65; max-width: 560px; }
-      .settings .s-sub  { color: var(--mut); font-size: 12.5px; margin: 10px 0 0; line-height: 1.5; }
+      .settings .s-note { color: var(--mut); font-size: 16px; margin: 0 0 24px; line-height: 1.65; max-width: 680px; }
+      .settings .s-sub  { color: var(--mut); font-size: 14px; margin: 10px 0 0; line-height: 1.55; }
       .settings .s-card p { line-height: 1.65; }
       .settings .s-card p + p { margin-top: 10px; }
 
