@@ -1290,6 +1290,9 @@ export async function addRecreation(rec) {
     emoji: String(rec.emoji || "").trim(),
     imageUrl: String(rec.imageUrl || "").trim(),
     browser: String(rec.browser || "").trim(),
+    mood: String(rec.mood || "").trim(),       // "chill" | "laugh" | "focus" | "energize" | ""
+    journal: [],                                 // [{at: ms, note: string}]
+    visitStartedAt: 0,                           // ephemeral, set on open, cleared on journal save
     openedCount: 0,
     lastOpenedAt: 0,
     addedAt: now,
@@ -1298,6 +1301,26 @@ export async function addRecreation(rec) {
   schedule("recreations", persistRecreations);
   emit("recreations");
   return id;
+}
+
+// Append a visit-journal entry to a recreation.
+export async function addRecreationJournal(id, note) {
+  const r = state.recreations.find(x => x.id === id);
+  if (!r) return;
+  r.journal = Array.isArray(r.journal) ? r.journal : [];
+  r.journal.push({ at: Date.now(), note: String(note || "").trim().slice(0, 240) });
+  r.visitStartedAt = 0;
+  schedule("recreations", persistRecreations);
+  emit("recreations");
+}
+
+// Mark a visit as "just opened" so the app can prompt for a journal entry when
+// the user comes back to the window.
+export async function markRecreationVisitStart(id) {
+  const r = state.recreations.find(x => x.id === id);
+  if (!r) return;
+  r.visitStartedAt = Date.now();
+  schedule("recreations", persistRecreations);
 }
 
 export async function updateRecreation(id, patch) {
@@ -1331,6 +1354,7 @@ export async function openRecreation(rec) {
     else await invoke("open_url", { url: rec.url });
   } catch (e) { console.warn("open recreation failed", e); }
   await bumpRecreationOpened(rec.id);
+  await markRecreationVisitStart(rec.id);
 }
 
 // Fetch og:image + og:title for a URL via the Rust proxy. Returns {image_url, title, final_url}.
@@ -1357,7 +1381,7 @@ window.__GAIN__ = {
   state, getSettings, getSheet, getSheets, getWallet, getDayLog,
   updateSettings, updateWallet, updateDayLog, updateSheetRow,
   addSheet, removeSheet, callGrok, serpSearch, youtubeSearch, secure, boot,
-  getRecreations, addRecreation, updateRecreation, deleteRecreation, bumpRecreationOpened, openRecreation, fetchUrlPreview,
+  getRecreations, addRecreation, updateRecreation, deleteRecreation, bumpRecreationOpened, openRecreation, fetchUrlPreview, addRecreationJournal, markRecreationVisitStart,
   getMotivations, getMotivationCounts, addMotivations, clearUserMotivations,
   getShopQuotes, getShopQuoteCounts, getShopQuote, addShopQuotes, clearUserShopQuotes,
   getRewards, addReward, updateReward, removeReward,
