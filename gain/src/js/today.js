@@ -2052,15 +2052,15 @@ function styles() {
 
     .today .task-row {
       display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto auto;
-      gap: var(--s-3); align-items: center;
-      padding: var(--s-3) var(--s-1); border-top: 1px solid var(--line);
+      gap: var(--s-4); align-items: center;
+      padding: 18px var(--s-2); border-top: 1px solid var(--line);
       transition: background var(--dur-fast) var(--ease);
     }
     .today .task-row:first-child { border-top: none; }
     .today .task-row:hover { background: var(--bg); border-radius: 10px; }
     .today .task-main { min-width: 0; }
-    .today .task-title { font-size: 15px; font-weight: 600; color: var(--ink); }
-    .today .task-meta  { font-size: 12px; color: var(--mut); margin-top: 2px; }
+    .today .task-title { font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.4; }
+    .today .task-meta  { font-size: 12.5px; color: var(--mut); margin-top: 4px; }
     .today .task-row.done .task-title { color: var(--mut); text-decoration: line-through; }
     .today .task-right { display: flex; align-items: center; gap: var(--s-3); }
     .today .chev { color: var(--mut); font-size: 14px; }

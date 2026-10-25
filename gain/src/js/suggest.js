@@ -574,7 +574,7 @@ function injectStyles() {
     @keyframes sgFade { from { opacity: 0; } to { opacity: 1; } }
     .sg-modal {
       background: var(--paper); border-radius: 20px;
-      width: 100%; max-width: 560px; max-height: 90vh;
+      width: 100%; max-width: 620px; max-height: 92vh;
       display: flex; flex-direction: column; overflow: hidden;
       box-shadow: 0 32px 80px rgba(0,0,0,.4), 0 0 0 1px var(--line);
       animation: sgPop 240ms cubic-bezier(.2,1.2,.3,1) both;
@@ -585,10 +585,10 @@ function injectStyles() {
     }
     .sg-head {
       display: flex; justify-content: space-between; align-items: flex-start;
-      padding: 22px 24px 16px; border-bottom: 1px solid var(--line);
+      padding: 28px 32px 22px; border-bottom: 1px solid var(--line);
     }
-    .sg-eyebrow { font-size: 10.5px; letter-spacing: .14em; font-weight: 700; color: var(--gold); text-transform: uppercase; margin-bottom: 6px; }
-    .sg-head h2 { margin: 0; font-size: 20px; font-weight: 700; color: var(--ink); letter-spacing: -.015em; }
+    .sg-eyebrow { font-size: 11.5px; letter-spacing: .16em; font-weight: 700; color: var(--gold); text-transform: uppercase; margin-bottom: 10px; }
+    .sg-head h2 { margin: 0; font-size: 22px; font-weight: 700; color: var(--ink); letter-spacing: -.015em; }
     .sg-close {
       border: none; background: transparent; cursor: pointer; color: var(--mut);
       width: 32px; height: 32px; border-radius: 8px;
@@ -597,9 +597,9 @@ function injectStyles() {
       transition: all .18s;
     }
     .sg-close:hover { background: var(--bg); color: var(--ink); }
-    .sg-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+    .sg-body { padding: 26px 32px; overflow-y: auto; flex: 1; }
 
-    .sg-section { margin-bottom: 20px; }
+    .sg-section { margin-bottom: 28px; }
     .sg-label {
       font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em;
       text-transform: uppercase; color: var(--mut); margin-bottom: 10px;
@@ -631,13 +631,13 @@ function injectStyles() {
     .sg-ctx-item b { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--mut); font-weight: 700; min-width: 110px; }
 
     .sg-foot {
-      display: flex; align-items: center; gap: 10px;
-      margin-top: 24px;
+      display: flex; align-items: center; gap: 12px;
+      margin-top: 32px;
     }
-    .sg-foot-result { margin-top: 20px; justify-content: flex-end; }
+    .sg-foot-result { margin-top: 28px; justify-content: flex-end; }
     .sg-btn {
-      padding: 10px 18px; border-radius: 10px; cursor: pointer;
-      font: 600 13px/1 var(--font-sans);
+      padding: 12px 22px; border-radius: 10px; cursor: pointer;
+      font: 600 14px/1 var(--font-sans);
       border: 1px solid var(--line);
       transition: all .18s;
     }
@@ -663,10 +663,10 @@ function injectStyles() {
     /* ---- Result card ---- */
     .sg-result { padding: 4px 0; }
     .sg-provenance {
-      display: flex; align-items: center; gap: 8px;
-      padding: 8px 12px; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 18px; margin-bottom: 18px;
       background: var(--green-soft); border-radius: 999px;
-      color: var(--green); font-size: 11.5px;
+      color: var(--green); font-size: 13px;
       font-weight: 500; letter-spacing: -.005em;
     }
     .sg-provenance b { color: var(--ink); font-weight: 700; }
@@ -682,15 +682,15 @@ function injectStyles() {
       color: var(--gold); font-size: 11.5px;
       cursor: help;
     }
-    .sg-pick-head { margin-bottom: 20px; }
+    .sg-pick-head { margin-bottom: 28px; }
     .sg-pick-title {
-      font-size: 20px; font-weight: 700; color: var(--ink);
-      letter-spacing: -.015em; line-height: 1.2; margin-bottom: 8px;
+      font-size: 24px; font-weight: 700; color: var(--ink);
+      letter-spacing: -.015em; line-height: 1.25; margin-bottom: 12px;
     }
-    .sg-pick-sub { display: flex; flex-wrap: wrap; gap: 6px; }
+    .sg-pick-sub { display: flex; flex-wrap: wrap; gap: 8px; }
     .sg-chip-mini {
-      padding: 3px 8px; border-radius: 6px;
-      font: 600 10.5px/1.3 var(--font-sans); letter-spacing: .02em;
+      padding: 5px 10px; border-radius: 7px;
+      font: 600 11.5px/1.3 var(--font-sans); letter-spacing: .02em;
       background: color-mix(in oklab, var(--ink) 5%, transparent); color: var(--mut);
     }
     .sg-chip-mini.sg-chip-pat { background: var(--blue-soft); color: var(--blue); }
@@ -700,23 +700,23 @@ function injectStyles() {
     .sg-chip-mini.sg-diff-hard { background: color-mix(in oklab, var(--red) 12%, transparent); color: var(--red); }
 
     .sg-section-h {
-      display: flex; align-items: center; gap: 8px;
-      font: 700 11.5px/1 var(--font-sans); letter-spacing: .08em;
-      text-transform: uppercase; color: var(--mut); margin-bottom: 8px;
+      display: flex; align-items: center; gap: 10px;
+      font: 700 11.5px/1 var(--font-sans); letter-spacing: .1em;
+      text-transform: uppercase; color: var(--mut); margin-bottom: 12px;
     }
-    .sg-section-ic { font-size: 15px; }
+    .sg-section-ic { font-size: 16px; }
     .sg-why {
-      margin: 0 0 20px; padding: 14px 16px;
+      margin: 0 0 28px; padding: 18px 22px;
       background: color-mix(in oklab, var(--gold) 6%, var(--paper));
       border-left: 3px solid var(--gold); border-radius: 10px;
-      font-size: 14px; line-height: 1.55; color: var(--ink);
+      font-size: 15px; line-height: 1.65; color: var(--ink);
     }
-    .sg-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .sg-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     .sg-stat {
-      padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+      padding: 16px 18px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
     }
-    .sg-stat-lb { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); margin-bottom: 4px; }
-    .sg-stat-v { font-size: 16px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; }
+    .sg-stat-lb { font: 700 11px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); margin-bottom: 8px; }
+    .sg-stat-v { font-size: 18px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; }
 
     /* ---- Empty / error ---- */
     .sg-empty, .sg-err {

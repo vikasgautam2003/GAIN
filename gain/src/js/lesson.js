@@ -258,6 +258,7 @@ function renderSectionHTML(sec, lesson, { stepIdx }) {
     return {
       html: `<section class="lsn-sec" data-sec="problem">
         <h3>${step}<span>Problem in simple words</span></h3>
+        ${p.concept ? `<div class="lsn-concept"><span class="lsn-concept-tag">The idea</span>${renderMarkdown(p.concept)}</div>` : ""}
         ${p.setup ? `<p class="lsn-setup">${renderMarkdown(p.setup)}</p>` : ""}
         ${p.example ? `<div class="lsn-example"><span class="lsn-example-tag">Example</span><code>${esc(p.example)}</code></div>` : ""}
         ${p.imageQuery ? imageFigureHTML(p.imageQuery) : ""}
@@ -285,11 +286,28 @@ function renderSectionHTML(sec, lesson, { stepIdx }) {
         <h3>${step}<span>Dry run</span></h3>
         ${d.example ? `<p class="lsn-setup">Tracing: <code>${esc(d.example)}</code></p>` : ""}
         ${d.steps.length ? `<ol class="lsn-steps">
-          ${d.steps.map(s => `<li><code class="lsn-step-call">${esc(s.call)}</code><span class="lsn-step-arrow">→</span><span class="lsn-step-ret">${esc(s.returns)}</span></li>`).join("")}
+          ${d.steps.map(s => `<li>
+            <div class="lsn-step-row">
+              <code class="lsn-step-call">${esc(s.call)}</code>
+              <span class="lsn-step-arrow">→</span>
+              <span class="lsn-step-ret">${esc(s.returns)}</span>
+            </div>
+            ${s.note ? `<div class="lsn-step-note">${renderMarkdown(s.note)}</div>` : ""}
+          </li>`).join("")}
         </ol>` : ""}
         ${d.imageQuery ? imageFigureHTML(d.imageQuery) : ""}
+        ${d.realWorldScenario ? `
+          <div class="lsn-realworld">
+            <div class="lsn-realworld-head">
+              <span class="lsn-realworld-tag">★ Where this shows up in the wild</span>
+            </div>
+            <p>${renderMarkdown(d.realWorldScenario)}</p>
+            ${d.realWorldImageQuery ? imageFigureHTML(d.realWorldImageQuery) : ""}
+          </div>
+        ` : ""}
       </section>`,
       image: img(d.imageQuery),
+      extraImages: [d.realWorldImageQuery].filter(Boolean).map(q => ({ query: q, section: "dryRun-realworld" })),
     };
   }
   if (sec === "code" && lesson.code) {
@@ -806,6 +824,7 @@ function normalizeLesson(p, plan) {
   const lesson = {
     oneLineGist: normStr(p.oneLineGist),
     problem: {
+      concept: normStr(p.problem?.concept),
       setup: normStr(p.problem?.setup),
       example: normStr(p.problem?.example),
       imageQuery: normStr(p.problem?.imageQuery),
@@ -818,7 +837,9 @@ function normalizeLesson(p, plan) {
     },
     dryRun: p.dryRun ? {
       example: normStr(p.dryRun.example),
-      steps: arr(p.dryRun.steps).map(s => ({ call: normStr(s.call), returns: normStr(s.returns) })).filter(s => s.call || s.returns),
+      steps: arr(p.dryRun.steps).map(s => ({ call: normStr(s.call), returns: normStr(s.returns), note: normStr(s.note) })).filter(s => s.call || s.returns),
+      realWorldScenario: normStr(p.dryRun.realWorldScenario),
+      realWorldImageQuery: normStr(p.dryRun.realWorldImageQuery),
       imageQuery: normStr(p.dryRun.imageQuery),
     } : null,
     code: p.code ? {
@@ -858,10 +879,10 @@ function buildSystemPrompt(kind, plan, { rebuildMode = false } = {}) {
 
   const schemaParts = [];
   schemaParts.push(`"oneLineGist": "one sentence capturing the key idea"`);
-  schemaParts.push(`"problem": {"setup": "plain-English what the problem asks", "example": "one tiny worked example e.g. myPow(2,4)=16", "imageQuery": "google image query for a problem diagram, or empty"}`);
+  schemaParts.push(`"problem": {"concept": "2-3 sentences explaining the UNDERLYING CONCEPT in plain human language, as if to someone who has never seen a LeetCode problem — e.g. for Two Sum: 'you have a list of numbers and want to find two that add up to a target; the question is how to do that without checking every pair'", "setup": "then the LeetCode-style framing in 1-2 sentences: what is given, what to return", "example": "one tiny worked example with real numbers e.g. myPow(2,4)=16", "imageQuery": "google image query for a problem diagram, or empty"}`);
   schemaParts.push(`"intuition": {"setup": "lead-in sentence", "trick": "the key insight in one sentence", "whyItWorks": "2-3 sentences explaining the invariant", "imageQuery": "google image query for an intuition visualization, or empty"}`);
   if (plan.includes("dryRun")) {
-    schemaParts.push(`"dryRun": {"example": "the specific input traced", "steps": [{"call": "pow(2,10)", "returns": "32*32 = 1024"}], "imageQuery": "call-stack or trace visualization query, or empty"}`);
+    schemaParts.push(`"dryRun": {"example": "the specific input traced", "steps": [{"call": "pow(2,10)", "returns": "32*32 = 1024", "note": "optional 1-sentence explanation of what this step is doing"}], "realWorldScenario": "2-3 sentences describing a REAL-WORLD scenario where this same algorithm/technique appears in actual software (e.g. for monotonic stack: 'stock-price streaming analytics tracking next-higher-price per tick' or 'auto-complete rendering showing the next-relevant suggestion'). Must be a plausible, specific product/engineering context — not a generic 'this is used in many places' hand-wave.", "realWorldImageQuery": "google image query for a diagram/screenshot of that real-world scenario (e.g. stock chart next-greater element, order-book visualization)", "imageQuery": "call-stack or trace visualization query, or empty"}`);
   }
   if (plan.includes("code")) {
     schemaParts.push(`"code": {"language": "${codeLang}", "source": "FULL ${codeLang.toUpperCase()} solution with correct indentation and newlines", "lineExplanations": [{"line": "a key line from source", "why": "what it does and why it must be there"}]}`);
@@ -1357,7 +1378,7 @@ function injectStyles() {
     .lsn-close:hover, .lsn-expand:hover { background: var(--bg); color: var(--ink); }
     .lsn-expand .lsn-expand-ic { font-size: 15px; display: inline-block; }
 
-    .lsn-body { padding: 20px 26px; overflow-y: auto; flex: 1; }
+    .lsn-body { padding: 28px 36px; overflow-y: auto; flex: 1; }
 
     /* ---- Gate ---- */
     .lsn-gate { text-align: center; padding: 20px 10px; }
@@ -1397,17 +1418,18 @@ function injectStyles() {
       color: var(--gold); flex-shrink: 0;
     }
 
-    .lsn-sec { margin-bottom: 24px; }
+    .lsn-sec { margin-bottom: 36px; }
     .lsn-sec h3 {
-      margin: 0 0 10px; font-size: 14px; font-weight: 700;
+      margin: 0 0 14px; font-size: 15px; font-weight: 700;
       letter-spacing: .01em; color: var(--mut);
-      padding-bottom: 7px; border-bottom: 1px solid var(--line);
-      display: flex; align-items: center; gap: 8px;
+      padding-bottom: 10px; border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; gap: 10px;
     }
     .lsn-sec .lsn-setup {
-      margin: 0 0 10px; font-size: 14px; line-height: 1.55;
+      margin: 0 0 14px; font-size: 14.5px; line-height: 1.65;
       color: var(--ink);
     }
+    .lsn-sec > * + * { margin-top: 14px; }
     .lsn-sec .lsn-bullets {
       margin: 0; padding-left: 0; list-style: none;
     }
@@ -1457,7 +1479,7 @@ function injectStyles() {
 
     /* ---- Inline SerpAPI figure ---- */
     .lsn-img {
-      margin: 0 0 24px; padding: 0;
+      margin: 16px 0 8px; padding: 0;
       border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
       background: var(--bg);
     }
@@ -1790,6 +1812,31 @@ function injectStyles() {
     .lsn-status span { font-size: 15px; font-weight: 700; }
 
     /* Problem */
+    /* Concept-first box (sits before the LeetCode framing in Problem section) */
+    .lsn-concept {
+      padding: 14px 16px; margin: 0 0 14px;
+      background: color-mix(in oklab, var(--gold) 6%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--gold) 22%, var(--line));
+      border-left: 4px solid var(--gold);
+      border-radius: 10px;
+      font: 500 14px/1.65 var(--font-sans); color: var(--ink);
+    }
+    .lsn-concept-tag { display: block; font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--gold); margin-bottom: 8px; }
+
+    /* Dry-run step note + real-world scenario card */
+    .lsn-step-row { display: flex; align-items: center; gap: 10px; }
+    .lsn-step-note { margin-left: 32px; margin-top: 4px; font: 400 12.5px/1.5 var(--font-sans); color: var(--mut); font-style: italic; }
+    .lsn-realworld {
+      margin-top: 20px; padding: 16px 18px;
+      background: color-mix(in oklab, var(--blue, #3870ff) 5%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 22%, var(--line));
+      border-radius: 12px;
+    }
+    .lsn-realworld-head { margin-bottom: 10px; }
+    .lsn-realworld-tag { font: 700 11px/1 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--blue, #3870ff); }
+    .lsn-realworld p { margin: 0 0 10px; font: 500 14px/1.6 var(--font-sans); color: var(--ink); }
+    .lsn-realworld .lsn-img { margin: 10px 0 0; }
+
     .lsn-example {
       display: flex; align-items: center; gap: 10px;
       padding: 10px 12px; margin: 10px 0 0;
