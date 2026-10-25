@@ -12,6 +12,7 @@ import { getDayLog, getSheets, getWallet, callGrok, secure } from "./store.js";
 import { calendarKey } from "./engine.js";
 import { callGroqJSON } from "./groqJson.js";
 import { renderMarkdown } from "./info.js";
+import { getRecentErrors } from "./errorlog.js";
 
 const REPORT_CACHE_PREFIX = "gain:weeklyReport:";
 
@@ -329,6 +330,24 @@ function paintReport(scrim, report, ctx) {
         <p>${renderMarkdown(report.quizReality || "")}</p>
       </section>
 
+      ${ctx.errorLog?.length ? `
+      <section class="wr-sec wr-errorlog">
+        <h3>⚠ Mistake log · ${ctx.errorLog.length} entr${ctx.errorLog.length === 1 ? "y" : "ies"}</h3>
+        <div class="wr-errorlog-list">
+          ${ctx.errorLog.slice(0, 10).map(e => `
+            <div class="wr-el-row">
+              <div class="wr-el-stars">★${e.stars}</div>
+              <div class="wr-el-main">
+                <div class="wr-el-title">${esc(e.title)}${e.pattern ? ` <span class="wr-el-pat">${esc(e.pattern)}</span>` : ""}</div>
+                ${e.note ? `<div class="wr-el-note">${esc(e.note)}</div>` : `<div class="wr-el-note wr-el-empty">— no note left —</div>`}
+              </div>
+              <div class="wr-el-when">${new Date(e.at).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</div>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+      ` : ""}
+
       <section class="wr-sec wr-focus">
         <h3>→ Next week · focus here</h3>
         <ol>${(report.nextWeekFocus || []).map(f => `<li>${renderMarkdown(f)}</li>`).join("")}</ol>
@@ -481,6 +500,7 @@ function buildWeeklyContext() {
     patternsTouchedList: [...patternsTouched],
     patternsAvoided: [...patternsAvoided],
     topicConfidenceLow: topicConfLow,
+    errorLog: getRecentErrors(7),
   };
 }
 
@@ -520,6 +540,15 @@ function buildReportUserPrompt(ctx) {
   if (ctx.patternsAvoided.length) lines.push(`PATTERNS ASSIGNED BUT NOT DONE: ${ctx.patternsAvoided.join(", ")}`);
   const lowConfTopics = Object.entries(ctx.topicConfidenceLow).filter(([, n]) => n <= 2).map(([t]) => t);
   if (lowConfTopics.length) lines.push(`SELF-REPORTED LOW CONFIDENCE: ${lowConfTopics.join(", ")} (user rated these ≤ 2★ in warm-up)`);
+  // Error log: mistakes journaled this week (★1/★2 solves + what the user wrote)
+  if (ctx.errorLog?.length) {
+    lines.push(``);
+    lines.push(`MISTAKE LOG (last 7 days — user's own words):`);
+    for (const e of ctx.errorLog.slice(0, 10)) {
+      const tag = e.pattern ? ` [${e.pattern}]` : "";
+      lines.push(`  - ★${e.stars} "${e.title}"${tag}: ${e.note || "(no note)"}`);
+    }
+  }
   lines.push(``);
   lines.push(`DAY BY DAY:`);
   for (const d of ctx.days) {
@@ -613,6 +642,16 @@ function injectReportStyles() {
       .wr-sec h3 { font-size: 14px; }
       .wr-sec ul, .wr-sec ol, .wr-sec p { font-size: 13.5px; }
       .wr-ask { padding: 16px 18px; }
+    .wr-errorlog h3 { color: #c3610c; }
+    .wr-errorlog-list { display: flex; flex-direction: column; gap: 8px; }
+    .wr-el-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 12px; padding: 12px 14px; background: var(--paper); border: 1px solid var(--line); border-left: 3px solid var(--red); border-radius: 10px; align-items: start; }
+    .wr-el-stars { font: 700 13px/1 var(--font-sans); color: var(--red); align-self: center; }
+    .wr-el-main { min-width: 0; }
+    .wr-el-title { font: 600 13.5px/1.35 var(--font-sans); color: var(--ink); margin-bottom: 4px; }
+    .wr-el-pat { color: var(--mut); font-weight: 500; margin-left: 6px; }
+    .wr-el-note { font: 500 12.5px/1.5 var(--font-sans); color: var(--ink); opacity: .88; }
+    .wr-el-empty { opacity: .5; font-style: italic; }
+    .wr-el-when { font: 500 10.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .04em; }
       .wr-ask-text { font-size: 15px !important; }
       .wr-closing { font-size: 14px; padding: 20px 0; }
       .wr-head-actions .wr-btn { padding: 7px 10px; font-size: 11.5px; }

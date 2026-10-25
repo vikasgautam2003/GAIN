@@ -112,6 +112,29 @@ function render() {
           <div id="recent-ledger"></div>
         </div>
 
+        <a class="dash-card dash-card-mastery" href="#mastery" id="mastery-tile" title="Visual grid of every pattern across your sheets, colored by mastery">
+          <div class="dash-card-head">
+            <h3>Pattern mastery</h3>
+            <small id="mastery-tile-sub">—</small>
+          </div>
+          <div class="mastery-tile-body" id="mastery-tile-body"></div>
+        </a>
+
+        <div class="dash-card dash-card-explainback" id="explainback-tile" role="button" tabindex="0" hidden title="Weekly recall drill — explain a problem you solved 3-6 weeks ago, Groq grades you">
+          <div class="dash-card-head">
+            <h3>Explain-back · due</h3>
+            <small>One problem · ~3 min · Groq grades</small>
+          </div>
+          <div class="explainback-tile-body">
+            <div class="eb-tile-ico">✎</div>
+            <div class="eb-tile-text">
+              <b>A problem from weeks ago is waiting.</b>
+              <span>Type what you remember. Groq grades clarity, accuracy, completeness.</span>
+            </div>
+            <div class="eb-tile-arrow">→</div>
+          </div>
+        </div>
+
         <div class="dash-card dash-card-mentor" id="mentor-tile" role="button" tabindex="0" title="Open the full-screen honest-coach weekly report">
           <div class="dash-card-head">
             <h3>Mentor report · this week</h3>
@@ -151,6 +174,11 @@ function paint(root) {
   const today = new Date();
   const dateKey = todayKey();
   const todayPlan = dayLog[dateKey];
+
+  // ---- Pattern mastery mini-grid tile ----
+  paintMasteryTile(root);
+  // ---- Explain-back drill tile (only when due) ----
+  paintExplainBackTile(root);
 
   // Streak-at-risk banner: only renders when streak is live, today has open tasks, and it's late enough.
   const streakNow = computeStreak(dayLog);
@@ -348,6 +376,18 @@ function attach(root) {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openReport(); }
     });
   }
+  // Explain-back tile → open the drill
+  const ebTile = root.querySelector("#explainback-tile");
+  if (ebTile) {
+    const open = async () => {
+      const mod = await import("./explainBack.js");
+      await mod.openExplainBackDrill();
+    };
+    ebTile.addEventListener("click", open);
+    ebTile.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+  }
 }
 
 function animateNum(el, to) {
@@ -365,6 +405,37 @@ function animateNum(el, to) {
 }
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]); }
+
+function paintExplainBackTile(root) {
+  const tile = root.querySelector("#explainback-tile");
+  if (!tile) return;
+  import("./explainBack.js").then(mod => {
+    tile.hidden = !mod.isDrillDueNow();
+  }).catch(() => { tile.hidden = true; });
+}
+
+function paintMasteryTile(root) {
+  const tile = root.querySelector("#mastery-tile");
+  if (!tile) return;
+  const body = root.querySelector("#mastery-tile-body");
+  const sub = root.querySelector("#mastery-tile-sub");
+  // Lazy-load the mastery module's computer to avoid a cycle
+  import("./mastery.js").then(mod => {
+    const ctx = mod.computePatternMastery();
+    const patterns = ctx.patterns;
+    const scored = patterns.filter(p => p.score != null);
+    const avg = scored.length ? scored.reduce((a, p) => a + p.score, 0) / scored.length : null;
+    if (sub) sub.textContent = scored.length
+      ? `${scored.length}/${patterns.length} touched · avg ${avg.toFixed(1)}★`
+      : `${patterns.length} patterns · untouched`;
+    if (body) {
+      // 18-cell mini-grid; show weakest first so the eye lands on gaps
+      const cells = patterns.slice(0, 18);
+      while (cells.length < 18) cells.push({ band: "untouched" });
+      body.innerHTML = cells.map(p => `<div class="mt-cell mt-${p.band}" title="${p.name ? esc(p.name) : ""}${p.score != null ? ` · ${p.score.toFixed(1)}★` : ""}"></div>`).join("");
+    }
+  }).catch(() => {});
+}
 
 function styles() {
   return `
@@ -487,7 +558,26 @@ function styles() {
     .mentor-tile-text span { font-size: 12.5px; color: var(--mut); line-height: 1.5; }
     .mentor-tile-arrow { font-size: 22px; color: var(--mut); transition: all .18s; }
     .dash-card-mentor:hover .mentor-tile-arrow { color: var(--gold); transform: translateX(4px); }
-    .dash-card-honor     { grid-column: 1 / 4; grid-row: 4; }
+    .dash-card-mastery   { grid-column: 1; grid-row: 4; text-decoration: none; cursor: pointer; transition: all .18s; }
+    .dash-card-mastery:hover { border-color: var(--gold); transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
+    .dash-card-explainback { grid-column: 2 / 4; grid-row: 4; cursor: pointer; transition: all .18s; }
+    .dash-card-explainback[hidden] { display: none; }
+    .dash-card-explainback:hover { border-color: var(--blue, #3870ff); transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
+    .explainback-tile-body { display: flex; align-items: center; gap: 16px; }
+    .eb-tile-ico { font-size: 32px; color: var(--blue, #3870ff); line-height: 1; }
+    .eb-tile-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .eb-tile-text b { font-size: 14px; font-weight: 700; color: var(--ink); }
+    .eb-tile-text span { font-size: 12.5px; color: var(--mut); line-height: 1.5; }
+    .eb-tile-arrow { font-size: 22px; color: var(--mut); transition: all .18s; }
+    .dash-card-explainback:hover .eb-tile-arrow { color: var(--blue, #3870ff); transform: translateX(4px); }
+    .mastery-tile-body { display: grid; grid-template-columns: repeat(6, 1fr); grid-template-rows: repeat(3, 1fr); gap: 3px; min-height: 100px; }
+    .mastery-tile-body .mt-cell { border-radius: 3px; aspect-ratio: 1; }
+    .mt-mastered  { background: color-mix(in oklab, var(--green) 55%, var(--paper)); }
+    .mt-solid     { background: color-mix(in oklab, var(--blue, #3870ff) 50%, var(--paper)); }
+    .mt-shaky     { background: color-mix(in oklab, var(--gold) 55%, var(--paper)); }
+    .mt-weak      { background: color-mix(in oklab, var(--red) 50%, var(--paper)); }
+    .mt-untouched { background: var(--line); }
+    .dash-card-honor     { grid-column: 2 / 4; grid-row: 4; }
 
     .dash-card-head {
       display: flex; justify-content: space-between; align-items: baseline;

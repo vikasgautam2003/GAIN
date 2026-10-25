@@ -168,6 +168,7 @@ export async function ensureDailyPlan(dateKey = todayKey()) {
         for (const t of dueNew) d.values[t.ref] = t.value;
       });
     }
+    await maybeInjectWildcard(dateKey);
     return getDayLog()[dateKey];
   }
   const plan = buildPlan(dateKey);
@@ -181,7 +182,108 @@ export async function ensureDailyPlan(dateKey = todayKey()) {
       dayEarned: 0
     };
   });
+  await maybeInjectWildcard(dateKey);
   return getDayLog()[dateKey];
+}
+
+// Wildcard — pick the weakest-pattern lowest-★ problem and inject it into
+// today's plan once per day. Deletable like any other task. If no sheets yet,
+// no-op. Uses the Pattern Mastery scorer so the signal matches the Mastery view.
+export async function maybeInjectWildcard(dateKey) {
+  try {
+    const day = getDayLog()[dateKey];
+    if (!day) return;
+    const ref = `WILDCARD-${dateKey}`;
+    if (day.assigned.some(t => t.ref === ref)) return;
+    // Also skip if the user previously deleted today's wildcard (we leave a tombstone)
+    if (day.wildcardSkipped) return;
+
+    const { computePatternMastery, computeWeakestProblems } = await import("./mastery.js");
+    const ctx = computePatternMastery();
+    if (!ctx.patterns.length) return;
+
+    // Prefer: an unsolved problem in the weakest TOUCHED pattern, falling back to
+    // the lowest-★ most-recent solve from computeWeakestProblems.
+    const weakPattern = ctx.patterns.find(p => p.score != null && p.score < 3.5);
+    const { getSheets } = await import("./store.js");
+    const sheets = getSheets();
+    let pick = null;
+
+    if (weakPattern) {
+      // Find an unsolved problem in weakPattern
+      outer: for (const [sheetName, sh] of Object.entries(sheets)) {
+        const patternCol = sh.headers?.find(h => /^(pattern|category)$/i.test(h));
+        if (!patternCol) continue;
+        const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+        const statusCol = sh.headers.find(h => /^status$/i.test(h));
+        const diffCol = sh.headers.find(h => /^difficulty$/i.test(h));
+        for (let i = 0; i < sh.rows.length; i++) {
+          const r = sh.rows[i];
+          if (String(r[patternCol] || "").trim() !== weakPattern.name) continue;
+          if (statusCol && /^solved$/i.test(String(r[statusCol] || ""))) continue;
+          const key = `${sheetName}#${i}`;
+          if (day.assigned.some(t => t.sheet === sheetName && t.rowIndex === i)) continue;
+          pick = {
+            sheet: sheetName,
+            rowIndex: i,
+            title: String((titleCol && r[titleCol]) || "Wildcard problem").trim(),
+            pattern: weakPattern.name,
+            difficulty: diffCol ? String(r[diffCol] || "").trim() : "",
+            kind: inferKindFromSheetName(sheetName),
+          };
+          break outer;
+        }
+      }
+    }
+    if (!pick) {
+      // Fallback: pick the weakest SOLVED problem (so we can revisit it)
+      const weak = computeWeakestProblems(ctx, 1)[0];
+      if (!weak) return;
+      if (day.assigned.some(t => t.sheet === weak.sheetName && t.rowIndex === weak.rowIndex)) return;
+      pick = {
+        sheet: weak.sheetName,
+        rowIndex: weak.rowIndex,
+        title: weak.title,
+        pattern: weak.pattern,
+        difficulty: weak.difficulty,
+        kind: inferKindFromSheetName(weak.sheetName),
+      };
+    }
+
+    const s = getSettings();
+    const task = {
+      ref,
+      kind: pick.kind || "dsa",
+      title: pick.title,
+      pattern: pick.pattern,
+      difficulty: pick.difficulty,
+      minutes: 40,
+      sheet: pick.sheet,
+      rowIndex: pick.rowIndex,
+      wildcard: true,
+    };
+    task.value = priceTask(task, s);
+
+    await updateDayLog(dl => {
+      const d = dl[dateKey];
+      if (!d) return;
+      if (d.assigned.some(t => t.ref === ref)) return;
+      d.assigned.push(task);
+      d.values[ref] = task.value;
+    });
+  } catch (e) {
+    console.warn("[wildcard] inject failed", e);
+  }
+}
+
+function inferKindFromSheetName(sheetName) {
+  const s = String(sheetName).toLowerCase();
+  if (/dsa/.test(s)) return "dsa";
+  if (/sql/.test(s)) return "sql";
+  if (/system.?design/.test(s)) return "sd";
+  if (/integration/.test(s)) return "int";
+  if (/extra|interview/.test(s)) return "ext";
+  return "dsa";
 }
 
 // --- Confidence capture ---------------------------------------------------

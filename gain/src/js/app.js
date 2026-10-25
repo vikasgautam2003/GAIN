@@ -13,6 +13,7 @@ import progress from "./progress.js";
 import library from "./library.js";
 import shop from "./shop.js";
 import settings from "./settings.js";
+import mastery from "./mastery.js";
 import problem from "./problem.js";
 
 router.register("dashboard", dashboard);
@@ -23,6 +24,7 @@ router.register("progress", progress);
 router.register("library", library);
 router.register("shop", shop);
 router.register("settings", settings);
+router.register("mastery", mastery);
 router.register("problem", problem);
 
 async function main() {

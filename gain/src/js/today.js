@@ -308,20 +308,23 @@ function paintPlan(root) {
     const isNewStudy = ["dsa", "sd", "int", "ext", "sql"].includes(t.kind) && !isRevisit;
     const isSuggested = !!t.suggested;
     const isCarried = !!t.carried;
+    const isWildcard = !!t.wildcard;
     const reviewOverride = day.reviewOverride?.[t.ref];
     // Show review-strip right after rating is captured, until user picks an override.
     const showReviewStrip = done && rating != null && !reviewOverride && t.sheet && t.rowIndex != null && !isWarmup;
-    const kindPill = isCarried
-      ? `<span class="k-pill k-carried" title="Rolled over from yesterday because it was undone at 7 PM IST">⤼ CARRIED</span>`
-      : isRevisit
-        ? `<span class="k-pill k-redo" title="Spaced-repetition revisit — lock memory in">↻ REDO</span>`
-        : isSuggested
-          ? `<span class="k-pill k-suggested" title="Groq-suggested task">✦ SUGGESTED</span>`
-          : isNewStudy
-            ? `<span class="k-pill k-new" title="New problem">✦ NEW</span>`
-            : isWarmup
-              ? `<span class="k-pill k-warmup" title="5-question Groq recall drill">⚡ WARM-UP</span>`
-              : "";
+    const kindPill = isWildcard
+      ? `<span class="k-pill k-wildcard" title="Weakness-driven Wildcard — your weakest pattern's lowest-★ problem">🎲 WILDCARD</span>`
+      : isCarried
+        ? `<span class="k-pill k-carried" title="Rolled over from yesterday because it was undone at 7 PM IST">⤼ CARRIED</span>`
+        : isRevisit
+          ? `<span class="k-pill k-redo" title="Spaced-repetition revisit — lock memory in">↻ REDO</span>`
+          : isSuggested
+            ? `<span class="k-pill k-suggested" title="Groq-suggested task">✦ SUGGESTED</span>`
+            : isNewStudy
+              ? `<span class="k-pill k-new" title="New problem">✦ NEW</span>`
+              : isWarmup
+                ? `<span class="k-pill k-warmup" title="5-question Groq recall drill">⚡ WARM-UP</span>`
+                : "";
     // Special warm-up card — gradient background, "Start →" instead of checkbox
     if (isWarmup) {
       const sourceText = done
@@ -715,6 +718,8 @@ async function handleDelete(ref, root) {
     d.done = d.done.filter(x => x !== ref);
     delete d.values[ref];
     if (wasDone) d.dayEarned = Math.max(0, d.dayEarned - task.value);
+    // Wildcard tombstone: don't re-inject the same wildcard after user removes it.
+    if (task.wildcard) d.wildcardSkipped = true;
     d.green = d.assigned.length > 0 && d.assigned.every(t => d.done.includes(t.ref));
   });
   // If the task was ticked, refund the coins
@@ -1208,6 +1213,13 @@ async function rateAndRepaint(root, ref, rating) {
   }
   // ★5 confetti burst — only perfect mastery earns it. Small, gold, celebratory.
   if (rating === 5 && row) fireMicroConfetti(row);
+  // Error log: ★1 / ★2 trigger a tailored "what tripped you?" prompt via Groq
+  if (rating <= 2) {
+    try {
+      const { openErrorLogPrompt } = await import("./errorlog.js");
+      await openErrorLogPrompt(root, dateKey, ref, rating);
+    } catch (e) { console.warn("[errorlog] prompt failed", e); }
+  }
   paintPlan(root);
 }
 
@@ -3031,6 +3043,11 @@ function styles() {
       background: color-mix(in oklab, var(--blue) 10%, transparent);
       color: var(--blue);
       border: 1px solid color-mix(in oklab, var(--blue) 22%, transparent);
+    }
+    .today .k-pill.k-wildcard {
+      background: color-mix(in oklab, #8b4bff 14%, transparent);
+      color: #8b4bff;
+      border: 1px solid color-mix(in oklab, #8b4bff 32%, transparent);
     }
     .today .task-row.done .k-pill { opacity: .55; }
   </style>

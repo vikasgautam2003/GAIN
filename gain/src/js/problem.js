@@ -106,6 +106,11 @@ function render(ctx) {
             <span class="chip status ${statusClass}">${esc(status)}</span>
           </div>
           <h1 class="prob-title">${esc(title)}</h1>
+          <div class="prob-companies-row" id="prob-companies-row">
+            <span class="pcr-label">Asked by</span>
+            <div class="pcr-chips" id="pcr-chips"></div>
+            <input id="pcr-input" type="text" placeholder="+ company" maxlength="40" autocomplete="off" />
+          </div>
           <div class="prob-link-row">
             <div class="prob-link-wrap">
               <span class="prob-link-icon">🔗</span>
@@ -232,6 +237,49 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
   // --- Related problems — lazy Groq, cached forever ---
   wireRelated(root, { sheetName, idx });
 
+
+  // --- Company tags editor ---
+  const companyCol = sheet.headers.find(h => /^compan(y|ies)$/i.test(h));
+  const parseCompanies = (raw) => String(raw || "").split(",").map(s => s.trim()).filter(Boolean);
+  const paintCompanies = () => {
+    const chipsEl = root.querySelector("#pcr-chips");
+    const current = parseCompanies(companyCol ? row[companyCol] : "");
+    chipsEl.innerHTML = current.map(c =>
+      `<span class="pcr-chip" data-c="${esc(c)}">${esc(c)}<button class="pcr-x" aria-label="Remove ${esc(c)}">×</button></span>`
+    ).join("");
+  };
+  const saveCompanies = async (list) => {
+    const dedupe = [...new Set(list.map(s => s.trim()).filter(Boolean))];
+    const col = companyCol || "Companies";
+    if (!companyCol) {
+      // Add the column to the sheet in memory + persist
+      sheet.headers.push("Companies");
+    }
+    row[col] = dedupe.join(", ");
+    await updateSheetRow(sheetName, idx, { [col]: dedupe.join(", ") });
+    paintCompanies();
+  };
+  paintCompanies();
+  const pcrInput = root.querySelector("#pcr-input");
+  pcrInput?.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const v = pcrInput.value.trim();
+    if (!v) return;
+    const list = parseCompanies(companyCol ? row[companyCol] : "");
+    list.push(v);
+    pcrInput.value = "";
+    await saveCompanies(list);
+  });
+  root.querySelector("#pcr-chips")?.addEventListener("click", async (e) => {
+    const x = e.target.closest(".pcr-x");
+    if (!x) return;
+    const chip = x.closest(".pcr-chip");
+    const toRemove = chip?.dataset.c;
+    if (!toRemove) return;
+    const list = parseCompanies(companyCol ? row[companyCol] : "").filter(c => c !== toRemove);
+    await saveCompanies(list);
+  });
 
   // --- LC URL input: write back to the sheet ---
   const urlInput = root.querySelector("#lc-url");
@@ -668,6 +716,14 @@ function styles() {
       animation: rise var(--dur-slow) var(--ease) both;
     }
     .prob .prob-chips { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+    .prob .prob-companies-row { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; flex-wrap: wrap; }
+    .prob .pcr-label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
+    .prob .pcr-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+    .prob .pcr-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px 4px 10px; border-radius: 999px; background: color-mix(in oklab, var(--blue, #3870ff) 12%, var(--paper)); border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 32%, var(--line)); color: var(--blue, #3870ff); font: 600 11.5px/1 var(--font-sans); letter-spacing: .01em; }
+    .prob .pcr-x { border: none; background: transparent; color: var(--mut); cursor: pointer; font: 400 13px/1 var(--font-sans); padding: 0 2px; transition: color .14s; }
+    .prob .pcr-x:hover { color: var(--red); }
+    .prob #pcr-input { padding: 6px 10px; border: 1px dashed var(--line2); border-radius: 999px; background: transparent; color: var(--ink); font: 500 12px/1 var(--font-sans); outline: none; width: 120px; }
+    .prob #pcr-input:focus { border-color: var(--blue, #3870ff); }
     .prob .chip {
       font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 999px;
       letter-spacing: .06em; text-decoration: none;
