@@ -92,6 +92,8 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
   // Chill Hideout — default browser for Recreation links. Empty = system default.
   // Per-site `browser` on each recreation card overrides this.
   recreationBrowser: "",
+  // Hideout lounge theme — "london" | "tokyo" | "lisbon" | "neworleans"
+  hideoutTheme: "london",
   sound: {
     on: true,
     volume: 0.7,
