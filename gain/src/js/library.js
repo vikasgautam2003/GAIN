@@ -141,8 +141,8 @@ function render() {
       }
       .lib .lib-cfilter .cf-all { padding: 0 4px; }
       .lib .lib-cfilter .cf-name { white-space: nowrap; }
-      .lib .co-cell { padding: 6px 8px !important; position: relative; }
-      .lib .co-cell-chips { display: inline-flex; align-items: center; gap: 3px; pointer-events: none; }
+      .lib .co-cell { padding: 6px 8px !important; position: relative; min-width: 180px; white-space: nowrap; }
+      .lib .co-cell-chips { display: inline-flex; align-items: center; gap: 3px; pointer-events: none; white-space: nowrap; }
       .lib .co-cell-more { font: 600 10.5px/1 var(--font-sans); color: var(--mut); margin-left: 2px; }
       .lib .co-cell-input {
         position: absolute; inset: 0; width: 100%; height: 100%;
@@ -184,7 +184,10 @@ function render() {
         box-shadow: var(--shadow); overflow: hidden;
       }
       .lib .scroll-body { max-height: calc(100vh - 340px); overflow: auto; }
-      .lib table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+      .lib .scroll-body::-webkit-scrollbar { height: 10px; width: 10px; }
+      .lib .scroll-body::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 999px; }
+      .lib .scroll-body::-webkit-scrollbar-thumb:hover { background: var(--mut); }
+      .lib table { min-width: max-content; border-collapse: collapse; font-size: 13.5px; }
       .lib thead th {
         text-align: left; padding: 12px 14px; font-weight: 700;
         background: var(--bg); border-bottom: 1px solid var(--line);
@@ -271,6 +274,7 @@ function render() {
       .lib col.c-pattern    { min-width: 180px; }
       .lib col.c-problem    { min-width: 240px; }
       .lib col.c-notes      { min-width: 220px; }
+      .lib col.c-companies  { min-width: 220px; }
       .lib col.c-default    { min-width: 160px; }
 
       .lib tbody td .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .04em; }

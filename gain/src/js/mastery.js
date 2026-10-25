@@ -13,17 +13,27 @@ import { getSheets, getDayLog, on } from "./store.js";
 import { calendarKey, todayKey } from "./engine.js";
 
 let unsub = null;
+let activeTab = "overview";    // "overview" | "shaky" | "all"
+let shakyFilter = { pattern: "", difficulty: "", sheet: "" };
+let allFilter = { band: "" };  // "" | "mastered" | "solid" | "shaky" | "weak" | "untouched"
 
 export default {
   async mount(root) {
     injectStyles();
     root.innerHTML = render();
+    // Portal the modal scrim to document.body so position:fixed is relative
+    // to the viewport, not to .view-inner (which carries an animation transform).
+    const scrim = root.querySelector("#m-scrim");
+    if (scrim) document.body.appendChild(scrim);
     paint(root);
     wire(root);
     if (unsub) unsub();
     unsub = on((ev) => { if (ev === "sheet" || ev === "dayLog") paint(root); });
   },
-  unmount() { if (unsub) { unsub(); unsub = null; } },
+  unmount() {
+    if (unsub) { unsub(); unsub = null; }
+    document.getElementById("m-scrim")?.remove();
+  },
 };
 
 // ============ COMPUTE ============
@@ -171,21 +181,22 @@ function render() {
         <div class="m-distrib-legend" id="m-distrib-legend"></div>
       </section>
 
-      <section class="m-shaky-sec" id="m-shaky-sec" hidden>
-        <div class="m-sec-h">
-          <h2>Shaky spots</h2>
-          <span class="m-sec-sub">Most likely to slip — low stars or going cold</span>
-        </div>
-        <div class="m-shaky-row" id="m-shaky-row"></div>
-      </section>
+      <nav class="m-tabs" role="tablist" aria-label="Mastery view">
+        <button class="m-tab" role="tab" data-tab="overview">
+          <span class="m-tab-label">Overview</span>
+          <span class="m-tab-dot"></span>
+        </button>
+        <button class="m-tab" role="tab" data-tab="shaky">
+          <span class="m-tab-label">Shaky spots</span>
+          <span class="m-tab-count" id="m-tab-count-shaky">—</span>
+        </button>
+        <button class="m-tab" role="tab" data-tab="all">
+          <span class="m-tab-label">All patterns</span>
+          <span class="m-tab-count" id="m-tab-count-all">—</span>
+        </button>
+      </nav>
 
-      <section class="m-grid-sec">
-        <div class="m-sec-h">
-          <h2>Every pattern</h2>
-          <span class="m-sec-sub">Click any tile to inspect its problems</span>
-        </div>
-        <div class="m-grid" id="m-grid"></div>
-      </section>
+      <section class="m-panel" id="m-panel" aria-live="polite"></section>
 
       <!-- Pattern detail panel -->
       <div class="m-scrim" id="m-scrim" hidden>
@@ -286,66 +297,221 @@ function paint(root) {
     distribSec.hidden = true;
   }
 
-  // Shaky
-  const shakySec = root.querySelector("#m-shaky-sec");
-  const shakyRow = root.querySelector("#m-shaky-row");
-  if (weakest.length) {
-    shakySec.hidden = false;
-    shakyRow.innerHTML = weakest.map(w => {
-      const severity = w.latestStars <= 2 ? "sev-high" : w.latestStars <= 3 ? "sev-mid" : "sev-low";
-      return `
-        <article class="shaky-card ${severity}" data-key="${esc(w.key)}">
-          <div class="sh-top">
-            <span class="sh-stars">${renderStarRow(w.latestStars)}</span>
-            <span class="sh-days">${formatDaysAgo(w.daysAgo)}</span>
-          </div>
-          <div class="sh-title">${esc(w.title)}</div>
-          <div class="sh-foot">
-            <span class="sh-pattern">${esc(w.pattern)}</span>
-            ${w.difficulty ? `<span class="m-diff m-diff-${w.difficulty.toLowerCase().replace(/[^a-z]/g, "")}">${esc(w.difficulty)}</span>` : ""}
-          </div>
-          <span class="sh-arrow" aria-hidden="true">→</span>
-        </article>
-      `;
-    }).join("");
-  } else {
-    shakySec.hidden = true;
-  }
+  // Full weakest list for the Shaky tab (not just top 10)
+  const allWeakest = computeWeakestProblems(ctx, 500);
 
-  // Grid
-  const grid = root.querySelector("#m-grid");
-  grid.innerHTML = ctx.patterns.map(p => {
-    const pct = p.totalProblems > 0 ? (p.uniqueSolved / p.totalProblems * 100) : 0;
-    const scoreTxt = p.score != null ? p.score.toFixed(1) : "·";
-    const scoreCls = p.score == null ? "p-tile-score-empty" : "";
-    const metaRight = p.daysSinceLatest != null ? formatDaysAgo(p.daysSinceLatest) : "untouched";
-    return `
-      <article class="p-tile p-${p.band}" data-pattern="${esc(p.name)}">
-        <div class="p-tile-stripe"></div>
-        <div class="p-tile-top">
-          <div class="p-tile-name">${esc(p.name)}</div>
-          <div class="p-tile-score ${scoreCls}">${scoreTxt}</div>
+  // Tab counts
+  root.querySelector("#m-tab-count-shaky").textContent = String(allWeakest.length);
+  root.querySelector("#m-tab-count-all").textContent = String(ctx.patterns.length);
+
+  // Mark active tab
+  root.querySelectorAll(".m-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === activeTab));
+
+  // Panel content
+  const panel = root.querySelector("#m-panel");
+  if (activeTab === "overview") panel.innerHTML = renderOverviewPanel(ctx, weakest);
+  else if (activeTab === "shaky") panel.innerHTML = renderShakyPanel(allWeakest);
+  else panel.innerHTML = renderAllPanel(ctx);
+
+  // Delegate clicks on dynamically-rendered content
+  wirePanelClicks(panel, root);
+}
+
+function renderOverviewPanel(ctx, weakest) {
+  // Top 4 most mastered patterns (score ≥ 3) sorted desc, for a positive signal
+  const strongest = ctx.patterns.filter(p => p.score != null).slice().sort((a, b) => b.score - a.score).slice(0, 4);
+  return `
+    <div class="m-ov-grid">
+      <div class="m-ov-col">
+        <div class="m-sec-h m-sec-h-inner">
+          <h2>Shaky spots</h2>
+          <span class="m-sec-sub">Top ${weakest.length} most likely to slip</span>
         </div>
-        <div class="p-tile-bar">
-          <span class="p-tile-fill" style="width:${pct.toFixed(1)}%"></span>
+        <div class="m-shaky-row">
+          ${weakest.length === 0
+            ? `<div class="m-empty">Nothing shaky yet — keep rating as ★1-3 to populate this list.</div>`
+            : weakest.map(renderShakyCard).join("")}
         </div>
-        <div class="p-tile-foot">
-          <span>${p.uniqueSolved}/${p.totalProblems}</span>
-          <span>${metaRight}</span>
+      </div>
+      ${strongest.length > 0 ? `
+      <div class="m-ov-col">
+        <div class="m-sec-h m-sec-h-inner">
+          <h2>Your strongest</h2>
+          <span class="m-sec-sub">Highest recency-weighted ★</span>
         </div>
-      </article>
-    `;
-  }).join("");
+        <div class="m-strongest">
+          ${strongest.map(p => `
+            <article class="p-tile p-${p.band} p-tile-mini" data-pattern="${esc(p.name)}">
+              <div class="p-tile-stripe"></div>
+              <div class="p-tile-top">
+                <div class="p-tile-name">${esc(p.name)}</div>
+                <div class="p-tile-score">${p.score.toFixed(1)}</div>
+              </div>
+              <div class="p-tile-foot">
+                <span>${p.uniqueSolved}/${p.totalProblems}</span>
+                <span>${p.daysSinceLatest != null ? formatDaysAgo(p.daysSinceLatest) : ""}</span>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </div>` : ""}
+    </div>
+  `;
+}
+
+function renderShakyPanel(allWeakest) {
+  // Build filter options
+  const patterns = Array.from(new Set(allWeakest.map(w => w.pattern))).filter(Boolean).sort();
+  const diffs = Array.from(new Set(allWeakest.map(w => w.difficulty))).filter(Boolean).sort();
+  const sheets = Array.from(new Set(allWeakest.map(w => w.sheetName))).filter(Boolean).sort();
+
+  const filtered = allWeakest.filter(w =>
+    (!shakyFilter.pattern || w.pattern === shakyFilter.pattern) &&
+    (!shakyFilter.difficulty || w.difficulty === shakyFilter.difficulty) &&
+    (!shakyFilter.sheet || w.sheetName === shakyFilter.sheet)
+  );
+
+  const chip = (name, active, label) => `
+    <button class="m-filter-chip ${active ? "active" : ""}" data-sf-${name}="${esc(label || "")}">${label || "All"}</button>
+  `;
+
+  return `
+    <div class="m-filter-bar">
+      <div class="m-filter-group">
+        <label class="m-filter-label">Pattern</label>
+        <div class="m-filter-chips" data-filter="pattern">
+          ${chip("pattern", shakyFilter.pattern === "", "")}
+          ${patterns.map(p => chip("pattern", shakyFilter.pattern === p, p)).join("")}
+        </div>
+      </div>
+      ${diffs.length ? `
+      <div class="m-filter-group">
+        <label class="m-filter-label">Difficulty</label>
+        <div class="m-filter-chips" data-filter="difficulty">
+          ${chip("difficulty", shakyFilter.difficulty === "", "")}
+          ${diffs.map(d => chip("difficulty", shakyFilter.difficulty === d, d)).join("")}
+        </div>
+      </div>` : ""}
+      ${sheets.length > 1 ? `
+      <div class="m-filter-group">
+        <label class="m-filter-label">Sheet</label>
+        <div class="m-filter-chips" data-filter="sheet">
+          ${chip("sheet", shakyFilter.sheet === "", "")}
+          ${sheets.map(s => chip("sheet", shakyFilter.sheet === s, s)).join("")}
+        </div>
+      </div>` : ""}
+      <div class="m-filter-stat">${filtered.length} of ${allWeakest.length}</div>
+    </div>
+    <div class="m-shaky-grid">
+      ${filtered.length === 0
+        ? `<div class="m-empty">No shaky problems match your filters.</div>`
+        : filtered.map(renderShakyCard).join("")}
+    </div>
+  `;
+}
+
+function renderAllPanel(ctx) {
+  const bands = [
+    { k: "", label: "All", c: ctx.patterns.length },
+    { k: "mastered", label: "Mastered", c: ctx.patterns.filter(p => p.band === "mastered").length },
+    { k: "solid",    label: "Solid",    c: ctx.patterns.filter(p => p.band === "solid").length },
+    { k: "shaky",    label: "Shaky",    c: ctx.patterns.filter(p => p.band === "shaky").length },
+    { k: "weak",     label: "Weak",     c: ctx.patterns.filter(p => p.band === "weak").length },
+    { k: "untouched",label: "Untouched",c: ctx.patterns.filter(p => p.band === "untouched").length },
+  ];
+  const filtered = ctx.patterns.filter(p => !allFilter.band || p.band === allFilter.band);
+  return `
+    <div class="m-filter-bar m-filter-bar-tight">
+      <div class="m-filter-group">
+        <label class="m-filter-label">Band</label>
+        <div class="m-filter-chips" data-filter="band">
+          ${bands.map(b => `<button class="m-filter-chip ${allFilter.band === b.k ? "active" : ""}" data-af-band="${b.k}">${b.label} <span class="m-fc-count">${b.c}</span></button>`).join("")}
+        </div>
+      </div>
+    </div>
+    <div class="m-grid">
+      ${filtered.map(p => {
+        const pct = p.totalProblems > 0 ? (p.uniqueSolved / p.totalProblems * 100) : 0;
+        const scoreTxt = p.score != null ? p.score.toFixed(1) : "·";
+        const scoreCls = p.score == null ? "p-tile-score-empty" : "";
+        const metaRight = p.daysSinceLatest != null ? formatDaysAgo(p.daysSinceLatest) : "untouched";
+        return `
+          <article class="p-tile p-${p.band}" data-pattern="${esc(p.name)}">
+            <div class="p-tile-stripe"></div>
+            <div class="p-tile-top">
+              <div class="p-tile-name">${esc(p.name)}</div>
+              <div class="p-tile-score ${scoreCls}">${scoreTxt}</div>
+            </div>
+            <div class="p-tile-bar">
+              <span class="p-tile-fill" style="width:${pct.toFixed(1)}%"></span>
+            </div>
+            <div class="p-tile-foot">
+              <span>${p.uniqueSolved}/${p.totalProblems}</span>
+              <span>${metaRight}</span>
+            </div>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderShakyCard(w) {
+  const severity = w.latestStars <= 2 ? "sev-high" : w.latestStars <= 3 ? "sev-mid" : "sev-low";
+  return `
+    <article class="shaky-card ${severity}" data-key="${esc(w.key)}">
+      <div class="sh-top">
+        <span class="sh-stars">${renderStarRow(w.latestStars)}</span>
+        <span class="sh-days">${formatDaysAgo(w.daysAgo)}</span>
+      </div>
+      <div class="sh-title">${esc(w.title)}</div>
+      <div class="sh-foot">
+        <span class="sh-pattern">${esc(w.pattern)}</span>
+        ${w.difficulty ? `<span class="m-diff m-diff-${w.difficulty.toLowerCase().replace(/[^a-z]/g, "")}">${esc(w.difficulty)}</span>` : ""}
+      </div>
+      <span class="sh-arrow" aria-hidden="true">→</span>
+    </article>
+  `;
+}
+
+function wirePanelClicks(panel, root) {
+  // Pattern tile → open detail
+  panel.querySelectorAll(".p-tile").forEach(tile => {
+    tile.addEventListener("click", () => openPatternDetail(root, tile.dataset.pattern));
+  });
+  // Shaky card → open problem page
+  panel.querySelectorAll(".shaky-card").forEach(card => {
+    card.addEventListener("click", () => {
+      const [sheet, idxStr] = card.dataset.key.split("#");
+      const idx = Number(idxStr);
+      if (sheet && Number.isFinite(idx)) location.hash = `#problem/${encodeURIComponent(sheet)}/${idx}`;
+    });
+  });
+  // Filter chip clicks (Shaky)
+  panel.querySelectorAll("[data-sf-pattern]").forEach(b => b.addEventListener("click", () => { shakyFilter.pattern = b.dataset.sfPattern; paint(root); }));
+  panel.querySelectorAll("[data-sf-difficulty]").forEach(b => b.addEventListener("click", () => { shakyFilter.difficulty = b.dataset.sfDifficulty; paint(root); }));
+  panel.querySelectorAll("[data-sf-sheet]").forEach(b => b.addEventListener("click", () => { shakyFilter.sheet = b.dataset.sfSheet; paint(root); }));
+  // Filter chip clicks (All patterns)
+  panel.querySelectorAll("[data-af-band]").forEach(b => b.addEventListener("click", () => { allFilter.band = b.dataset.afBand; paint(root); }));
 }
 
 function wire(root) {
-  const scrim = root.querySelector("#m-scrim");
+  const scrim = document.getElementById("m-scrim");
   const closeDetail = () => { scrim.hidden = true; scrim.dataset.pattern = ""; };
-  root.querySelector("#m-d-close")?.addEventListener("click", closeDetail);
+  document.getElementById("m-d-close")?.addEventListener("click", closeDetail);
   scrim.addEventListener("click", (e) => { if (e.target === scrim) closeDetail(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !scrim.hidden) closeDetail(); });
 
-  root.querySelector("#m-grid").addEventListener("click", (e) => {
+  // Tab switching
+  root.querySelectorAll(".m-tab").forEach(t => {
+    t.addEventListener("click", () => {
+      activeTab = t.dataset.tab;
+      paint(root);
+    });
+  });
+
+  // Old #m-grid delegate — no longer rendered at mount; harmless no-op guard
+  root.querySelector("#m-grid")?.addEventListener("click", (e) => {
     const tile = e.target.closest?.(".p-tile");
     if (!tile) return;
     openPatternDetail(root, tile.dataset.pattern);
@@ -366,10 +532,10 @@ function openPatternDetail(root, patternName) {
   const ctx = computePatternMastery();
   const pattern = ctx.patterns.find(p => p.name === patternName);
   if (!pattern) return;
-  const scrim = root.querySelector("#m-scrim");
+  const scrim = document.getElementById("m-scrim");
   scrim.dataset.pattern = patternName;
-  root.querySelector("#m-d-title").textContent = patternName;
-  const band = root.querySelector("#m-d-band");
+  document.getElementById("m-d-title").textContent = patternName;
+  const band = document.getElementById("m-d-band");
   band.className = `m-d-eyebrow band-${pattern.band}`;
   band.textContent = BAND_LABELS[pattern.band] || pattern.band;
 
@@ -383,7 +549,7 @@ function openPatternDetail(root, patternName) {
   const spark = allSolves.slice(0, 12).reverse();
   const sparkHtml = spark.length ? renderSparkline(spark) : "";
 
-  const statsEl = root.querySelector("#m-d-stats");
+  const statsEl = document.getElementById("m-d-stats");
   statsEl.innerHTML = `
     <div class="m-d-stat-row">
       <span class="m-d-stat"><label>Score</label><b>${pattern.score != null ? pattern.score.toFixed(2) : "—"}</b></span>
@@ -415,7 +581,7 @@ function openPatternDetail(root, patternName) {
     return a.latestStars - b.latestStars;
   });
 
-  const body = root.querySelector("#m-d-body");
+  const body = document.getElementById("m-d-body");
   body.innerHTML = `
     <div class="m-plist">
       ${problemList.map(p => {
@@ -623,9 +789,99 @@ function injectStyles() {
     .m-sec-h { display: flex; align-items: baseline; gap: 14px; max-width: var(--m-max); margin: 0 auto 14px; flex-wrap: wrap; }
     .m-sec-h h2 { margin: 0; font: 600 20px/1.2 var(--font-sans); letter-spacing: -.012em; color: var(--ink); }
     .m-sec-sub { color: var(--mut); font-size: 12.5px; }
+    .m-sec-h-inner { margin: 0 0 12px; }
+
+    /* ---- TABS ---- */
+    .m-tabs {
+      display: inline-flex; gap: 2px; max-width: var(--m-max); margin: 10px auto 24px;
+      padding: 4px; border-radius: 12px;
+      background: color-mix(in oklab, var(--mut) 10%, var(--paper));
+      border: 1px solid var(--line);
+    }
+    .m-tab {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 16px; border-radius: 9px; border: none; background: transparent;
+      font: 600 13px/1 var(--font-sans); color: var(--mut); cursor: pointer;
+      transition: all .18s ease; letter-spacing: -.005em;
+    }
+    .m-tab:hover { color: var(--ink); }
+    .m-tab.active {
+      background: var(--paper); color: var(--ink);
+      box-shadow:
+        0 1px 2px rgba(0,0,0,.06),
+        0 0 0 1px var(--line);
+    }
+    .m-tab-count {
+      font: 600 10.5px/1 var(--font-sans); color: var(--mut);
+      background: color-mix(in oklab, var(--mut) 14%, transparent);
+      padding: 3px 7px; border-radius: 999px; min-width: 20px; text-align: center;
+    }
+    .m-tab.active .m-tab-count {
+      background: color-mix(in oklab, var(--ink) 10%, transparent);
+      color: var(--ink);
+    }
+    .m-tab-dot { display: none; }
+
+    /* ---- PANEL ---- */
+    .m-panel { max-width: var(--m-max); margin: 0 auto; }
+    .m-empty {
+      padding: 32px 16px; text-align: center; color: var(--mut); font: 500 13px/1.6 var(--font-sans);
+      border: 1px dashed var(--line2); border-radius: 12px;
+    }
+
+    /* ---- OVERVIEW GRID ---- */
+    .m-ov-grid {
+      display: grid; grid-template-columns: 1fr; gap: 32px;
+    }
+    @media (min-width: 1024px) {
+      .m-ov-grid { grid-template-columns: 1.6fr 1fr; gap: 36px; }
+    }
+    .m-strongest { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .p-tile-mini .p-tile-bar, .p-tile-mini .p-tile-foot { display: flex; }
+
+    /* ---- FILTER BAR ---- */
+    .m-filter-bar {
+      display: flex; flex-wrap: wrap; align-items: flex-end; gap: 18px 24px;
+      padding: 14px 16px; margin-bottom: 20px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    }
+    .m-filter-bar-tight { padding: 10px 14px; gap: 10px; }
+    .m-filter-group { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+    .m-filter-label {
+      font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase;
+      color: var(--mut);
+    }
+    .m-filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .m-filter-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 11px; border-radius: 999px;
+      background: var(--paper); border: 1px solid var(--line);
+      font: 500 12px/1 var(--font-sans); color: var(--mut);
+      cursor: pointer; transition: all .14s ease;
+    }
+    .m-filter-chip:hover { color: var(--ink); border-color: var(--line2); transform: translateY(-1px); }
+    .m-filter-chip.active {
+      color: var(--paper); border-color: var(--ink); background: var(--ink);
+      font-weight: 600;
+    }
+    .m-fc-count {
+      font: 700 10px/1 var(--font-sans);
+      padding: 2px 5px; border-radius: 999px;
+      background: color-mix(in oklab, var(--mut) 18%, transparent);
+    }
+    .m-filter-chip.active .m-fc-count {
+      background: color-mix(in oklab, var(--paper) 22%, transparent);
+      color: var(--paper);
+    }
+    .m-filter-stat {
+      margin-left: auto; align-self: center;
+      font: 500 11.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .04em;
+    }
+
+    .m-shaky-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 
     /* ---- SHAKY SPOTS ---- */
-    .m-shaky-sec { max-width: var(--m-max); margin: 0 auto 46px; }
     .m-shaky-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
     .shaky-card {
       position: relative;
@@ -662,7 +918,7 @@ function injectStyles() {
     }
 
     /* ---- PATTERN GRID ---- */
-    .m-grid-sec { max-width: var(--m-max); margin: 0 auto; }
+    .m-grid-sec, .m-grid { max-width: var(--m-max); margin: 0 auto; }
     .m-grid {
       display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
       gap: 10px;
@@ -694,12 +950,26 @@ function injectStyles() {
     .p-weak      .p-tile-stripe { background: var(--red); }
     .p-untouched .p-tile-stripe { background: color-mix(in oklab, var(--mut) 20%, var(--paper)); }
 
-    .p-mastered  { background: color-mix(in oklab, var(--green) 7%, var(--paper)); border-color: color-mix(in oklab, var(--green) 20%, var(--line)); }
-    .p-solid     { background: color-mix(in oklab, var(--blue, #3870ff) 6%, var(--paper)); border-color: color-mix(in oklab, var(--blue, #3870ff) 18%, var(--line)); }
-    .p-shaky     { background: color-mix(in oklab, var(--gold) 8%, var(--paper)); border-color: color-mix(in oklab, var(--gold) 24%, var(--line)); }
-    .p-weak      { background: color-mix(in oklab, var(--red) 7%, var(--paper)); border-color: color-mix(in oklab, var(--red) 22%, var(--line)); }
-    .p-untouched { background: var(--paper); border-color: var(--line); }
-    .p-untouched { opacity: .78; }
+    .p-mastered  {
+      background: linear-gradient(135deg, color-mix(in oklab, var(--green) 14%, var(--paper)) 0%, color-mix(in oklab, var(--green) 5%, var(--paper)) 100%);
+      border-color: color-mix(in oklab, var(--green) 30%, var(--line));
+    }
+    .p-solid     {
+      background: linear-gradient(135deg, color-mix(in oklab, var(--blue, #3870ff) 12%, var(--paper)) 0%, color-mix(in oklab, var(--blue, #3870ff) 4%, var(--paper)) 100%);
+      border-color: color-mix(in oklab, var(--blue, #3870ff) 28%, var(--line));
+    }
+    .p-shaky     {
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 16%, var(--paper)) 0%, color-mix(in oklab, var(--gold) 6%, var(--paper)) 100%);
+      border-color: color-mix(in oklab, var(--gold) 34%, var(--line));
+    }
+    .p-weak      {
+      background: linear-gradient(135deg, color-mix(in oklab, var(--red) 14%, var(--paper)) 0%, color-mix(in oklab, var(--red) 5%, var(--paper)) 100%);
+      border-color: color-mix(in oklab, var(--red) 30%, var(--line));
+    }
+    .p-untouched {
+      background: var(--paper); border-color: var(--line);
+      opacity: .72;
+    }
     .p-untouched:hover { opacity: 1; }
 
     .p-tile-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-top: 2px; }
