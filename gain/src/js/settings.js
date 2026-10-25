@@ -473,6 +473,9 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
               <button class="bz-btn bz-btn-primary" id="btn-mentor-report" title="Full-screen honest-coach mentor letter — reads every signal from the last 7 days and gives you specific wins, concerns, next-week focus, and the one big ask">
                 <span class="bz-btn-ic">✦</span> Open mentor report card
               </button>
+              <button class="bz-btn bz-btn-ghost" id="btn-reseed-companies" title="Fill the Companies column across every sheet with curated FAANG/HFT/startup tags for well-known problems. Never overwrites rows you already tagged.">
+                <span class="bz-btn-ic">🏷</span> Re-seed company tags
+              </button>
             </div>
           </div>
 
@@ -1526,6 +1529,31 @@ function attachHandlers(root) {
   root.querySelector("#btn-mentor-report")?.addEventListener("click", async () => {
     const { openWeeklyReportCard } = await import("./weeklyReview.js");
     openWeeklyReportCard();
+  });
+
+  // ---- Re-seed company tags across every sheet ----
+  root.querySelector("#btn-reseed-companies")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const originalHTML = btn.innerHTML;
+    try {
+      btn.disabled = true;
+      btn.innerHTML = `<span class="bz-btn-ic">⏱</span> Tagging…`;
+      const [{ seedAllCompanies }, store] = await Promise.all([
+        import("./companyData.js"),
+        import("./store.js"),
+      ]);
+      const res = await seedAllCompanies({
+        getSheets: store.getSheets,
+        persistSheet: store.persistSheet,
+        emit: store.emit,
+      });
+      btn.innerHTML = `✓ ${res.rowsWritten} rows tagged · ${res.sheetsTouched} sheet${res.sheetsTouched === 1 ? "" : "s"}`;
+      localStorage.setItem("gain:companies:seeded:v1", String(Date.now()));
+      setTimeout(() => { btn.innerHTML = originalHTML; btn.disabled = false; }, 3600);
+    } catch (err) {
+      btn.innerHTML = `✗ ${err.message || err}`;
+      setTimeout(() => { btn.innerHTML = originalHTML; btn.disabled = false; }, 3600);
+    }
   });
 
   // ---- Grimoire export (one .md file of every scrap) ----

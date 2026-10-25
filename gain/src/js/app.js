@@ -33,6 +33,23 @@ async function main() {
   updateChrome();
   on(() => updateChrome());
 
+  // One-shot: fill the Companies column across every sheet with curated
+  // FAANG/HFT/startup tags for well-known problems. Idempotent + never
+  // overwrites a row that already has companies.
+  if (!localStorage.getItem("gain:companies:seeded:v1")) {
+    try {
+      const [{ seedAllCompanies }, { persistSheet, emit }] = await Promise.all([
+        import("./companyData.js"),
+        import("./store.js"),
+      ]);
+      const res = await seedAllCompanies({ getSheets, persistSheet, emit });
+      localStorage.setItem("gain:companies:seeded:v1", String(Date.now()));
+      console.log(`[companies seed] touched ${res.sheetsTouched} sheets, wrote ${res.rowsWritten} rows`);
+    } catch (err) {
+      console.warn("Company seed failed:", err);
+    }
+  }
+
   if (!location.hash) location.hash = "#dashboard";
   router.go();
 

@@ -51,7 +51,7 @@ export default {
     // live-refresh when wallet/dayLog/settings change
     if (unsub) unsub();
     unsub = on((ev) => {
-      if (ev === "dayLog" || ev === "wallet") paintPlan(root);
+      if (ev === "dayLog" || ev === "wallet" || ev === "sheet") paintPlan(root);
       if (ev === "motivations") startQuoteRotation(root);
       if (ev === "settings") {
         const sNow = getSettings();

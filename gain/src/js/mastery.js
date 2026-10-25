@@ -32,10 +32,8 @@ export function computePatternMastery() {
   const dayLog = getDayLog();
   const todayMs = Date.now();
 
-  // Build an index: sheetName#rowIndex → { pattern, title, difficulty, kind }
-  // using the Pattern/Category column + title column.
-  const rowIndex = new Map();   // key → row meta
-  const patternToKeys = new Map();  // pattern → Set<key>
+  const rowIndex = new Map();
+  const patternToKeys = new Map();
   for (const [sheetName, sh] of Object.entries(sheets)) {
     if (!sh?.rows?.length) continue;
     const patternCol = sh.headers.find(h => /^(pattern|category)$/i.test(h));
@@ -58,10 +56,7 @@ export function computePatternMastery() {
     }
   }
 
-  // Walk every day entry; collect solves per sheet-row with ★ + timestamp.
-  // Multiple solves of the same row keep each occurrence (recency weighting
-  // handles it naturally).
-  const solvesByKey = new Map(); // key → [{stars, daysAgo}]
+  const solvesByKey = new Map();
   for (const [d, entry] of Object.entries(dayLog)) {
     if (!entry || !Array.isArray(entry.done)) continue;
     const dateMs = parseDateKey(d);
@@ -78,7 +73,6 @@ export function computePatternMastery() {
     }
   }
 
-  // Compute pattern mastery
   const patterns = [];
   for (const [pattern, keys] of patternToKeys.entries()) {
     let sumW = 0, sumSW = 0, solveCount = 0, uniqueSolved = 0, latest = Infinity, latestKey = null;
@@ -107,7 +101,6 @@ export function computePatternMastery() {
   }
 
   patterns.sort((a, b) => {
-    // Prioritize scored patterns first; among those, lowest-first (weakest surface)
     if (a.score == null && b.score == null) return b.totalProblems - a.totalProblems;
     if (a.score == null) return 1;
     if (b.score == null) return -1;
@@ -118,18 +111,14 @@ export function computePatternMastery() {
 }
 
 export function computeWeakestProblems(ctx, n = 10) {
-  // Walk every solved key; for each, take the LATEST solve's ★ and recency-weight it.
   const results = [];
   for (const [key, solves] of ctx.solvesByKey.entries()) {
     if (!solves.length) continue;
     const meta = ctx.rowIndex.get(key);
     if (!meta) continue;
-    // Latest solve = min daysAgo
     const sorted = [...solves].sort((a, b) => a.daysAgo - b.daysAgo);
     const latest = sorted[0];
     const weight = Math.exp(-latest.daysAgo / 60);
-    // Weakness score: lower stars + older recency = weaker
-    // Compose: latest_stars × weight → smallest first
     const weakness = latest.stars * weight;
     results.push({
       key,
@@ -169,15 +158,23 @@ function render() {
   return `
     <div class="view-inner mastery">
       <header class="m-head">
-        <div class="m-eyebrow">PATTERN MASTERY</div>
-        <h1 class="m-title">Where you stand.</h1>
-        <p class="m-sub" id="m-sub">—</p>
+        <div class="m-head-left">
+          <div class="m-eyebrow">PATTERN MASTERY</div>
+          <h1 class="m-title">Where you stand.</h1>
+          <p class="m-motiv" id="m-motiv">—</p>
+        </div>
+        <aside class="m-head-right" id="m-head-right"></aside>
       </header>
+
+      <section class="m-distrib-sec" id="m-distrib-sec" hidden>
+        <div class="m-distrib-bar" id="m-distrib-bar"></div>
+        <div class="m-distrib-legend" id="m-distrib-legend"></div>
+      </section>
 
       <section class="m-shaky-sec" id="m-shaky-sec" hidden>
         <div class="m-sec-h">
           <h2>Shaky spots</h2>
-          <span class="m-sec-sub">The 10 solves most likely to slip — lowest ★ or oldest</span>
+          <span class="m-sec-sub">Most likely to slip — low stars or going cold</span>
         </div>
         <div class="m-shaky-row" id="m-shaky-row"></div>
       </section>
@@ -185,14 +182,7 @@ function render() {
       <section class="m-grid-sec">
         <div class="m-sec-h">
           <h2>Every pattern</h2>
-          <span class="m-sec-sub">Color = recency-weighted ★ · darker = weaker · click to inspect</span>
-          <div class="m-legend">
-            <span class="lg lg-mastered">≥ 4.0</span>
-            <span class="lg lg-solid">3.0–4.0</span>
-            <span class="lg lg-shaky">2.0–3.0</span>
-            <span class="lg lg-weak">&lt; 2.0</span>
-            <span class="lg lg-untouched">untouched</span>
-          </div>
+          <span class="m-sec-sub">Click any tile to inspect its problems</span>
         </div>
         <div class="m-grid" id="m-grid"></div>
       </section>
@@ -219,11 +209,81 @@ function render() {
 function paint(root) {
   const ctx = computePatternMastery();
   const weakest = computeWeakestProblems(ctx, 10);
-  const subEl = root.querySelector("#m-sub");
-  const totalSolved = Array.from(ctx.solvesByKey.values()).reduce((a, b) => a + b.length, 0);
-  const patternsTouched = ctx.patterns.filter(p => p.score != null).length;
-  if (subEl) {
-    subEl.textContent = `${ctx.patterns.length} patterns across your sheets · ${patternsTouched} touched · ${totalSolved} total solves recorded`;
+
+  // Band counts
+  const counts = { mastered: 0, solid: 0, shaky: 0, weak: 0, untouched: 0 };
+  for (const p of ctx.patterns) counts[p.band]++;
+  const total = ctx.patterns.length;
+  const touched = total - counts.untouched;
+
+  // Overall weighted ★ (across all solves, recency-weighted)
+  let sumW = 0, sumSW = 0, totalSolves = 0;
+  for (const solves of ctx.solvesByKey.values()) {
+    for (const s of solves) {
+      const w = Math.exp(-s.daysAgo / 60);
+      sumW += w;
+      sumSW += s.stars * w;
+      totalSolves++;
+    }
+  }
+  const overall = sumW > 0 ? sumSW / sumW : null;
+
+  // Hero stat chip
+  const headRight = root.querySelector("#m-head-right");
+  if (overall != null) {
+    headRight.innerHTML = `
+      <div class="m-overall">
+        <div class="m-overall-score">${overall.toFixed(1)}</div>
+        <div class="m-overall-stars">${renderStarRow(overall)}</div>
+        <div class="m-overall-label">overall ★ · ${totalSolves} solve${totalSolves === 1 ? "" : "s"}</div>
+      </div>
+    `;
+  } else {
+    headRight.innerHTML = `
+      <div class="m-overall m-overall-empty">
+        <div class="m-overall-score">·</div>
+        <div class="m-overall-label">no solves yet</div>
+      </div>
+    `;
+  }
+
+  // Motivation line
+  const motivEl = root.querySelector("#m-motiv");
+  if (total === 0) {
+    motivEl.textContent = "No sheets have a Pattern column yet — add one to start the map.";
+  } else if (touched === 0) {
+    motivEl.textContent = `${total} patterns waiting. Solve one and the map starts to glow.`;
+  } else if (counts.untouched > 0) {
+    motivEl.innerHTML = `<b>${touched}</b> of ${total} patterns touched · <b>${counts.untouched}</b> still untouched.`;
+  } else {
+    motivEl.innerHTML = `All <b>${total}</b> patterns touched. ${counts.mastered} mastered · ${counts.weak + counts.shaky} needing reinforcement.`;
+  }
+
+  // Distribution bar
+  const distribSec = root.querySelector("#m-distrib-sec");
+  if (total > 0) {
+    distribSec.hidden = false;
+    const bar = root.querySelector("#m-distrib-bar");
+    const legend = root.querySelector("#m-distrib-legend");
+    const bands = [
+      { k: "mastered", label: "Mastered", c: counts.mastered },
+      { k: "solid",    label: "Solid",    c: counts.solid },
+      { k: "shaky",    label: "Shaky",    c: counts.shaky },
+      { k: "weak",     label: "Weak",     c: counts.weak },
+      { k: "untouched",label: "Untouched",c: counts.untouched },
+    ];
+    bar.innerHTML = bands.filter(b => b.c > 0).map(b => {
+      const pct = (b.c / total * 100).toFixed(2);
+      return `<span class="m-db-seg m-db-${b.k}" style="width:${pct}%" title="${b.c} ${b.label}"></span>`;
+    }).join("");
+    legend.innerHTML = bands.map(b => `
+      <span class="m-db-leg">
+        <span class="m-db-dot m-db-${b.k}"></span>
+        <b>${b.c}</b> ${b.label}
+      </span>
+    `).join("");
+  } else {
+    distribSec.hidden = true;
   }
 
   // Shaky
@@ -231,27 +291,51 @@ function paint(root) {
   const shakyRow = root.querySelector("#m-shaky-row");
   if (weakest.length) {
     shakySec.hidden = false;
-    shakyRow.innerHTML = weakest.map(w => `
-      <article class="shaky-card" data-key="${esc(w.key)}">
-        <div class="sh-stars">${"★".repeat(w.latestStars)}${"☆".repeat(5 - w.latestStars)}</div>
-        <div class="sh-title">${esc(w.title)}</div>
-        <div class="sh-meta">${esc(w.pattern)}${w.difficulty ? " · " + esc(w.difficulty) : ""}</div>
-        <div class="sh-foot">${formatDaysAgo(w.daysAgo)} · ${w.solveCount} solve${w.solveCount === 1 ? "" : "s"}</div>
-      </article>
-    `).join("");
+    shakyRow.innerHTML = weakest.map(w => {
+      const severity = w.latestStars <= 2 ? "sev-high" : w.latestStars <= 3 ? "sev-mid" : "sev-low";
+      return `
+        <article class="shaky-card ${severity}" data-key="${esc(w.key)}">
+          <div class="sh-top">
+            <span class="sh-stars">${renderStarRow(w.latestStars)}</span>
+            <span class="sh-days">${formatDaysAgo(w.daysAgo)}</span>
+          </div>
+          <div class="sh-title">${esc(w.title)}</div>
+          <div class="sh-foot">
+            <span class="sh-pattern">${esc(w.pattern)}</span>
+            ${w.difficulty ? `<span class="m-diff m-diff-${w.difficulty.toLowerCase().replace(/[^a-z]/g, "")}">${esc(w.difficulty)}</span>` : ""}
+          </div>
+          <span class="sh-arrow" aria-hidden="true">→</span>
+        </article>
+      `;
+    }).join("");
   } else {
     shakySec.hidden = true;
   }
 
   // Grid
   const grid = root.querySelector("#m-grid");
-  grid.innerHTML = ctx.patterns.map(p => `
-    <article class="p-tile p-${p.band}" data-pattern="${esc(p.name)}">
-      <div class="p-tile-name">${esc(p.name)}</div>
-      <div class="p-tile-score">${p.score != null ? p.score.toFixed(1) : "—"}</div>
-      <div class="p-tile-meta">${p.uniqueSolved}/${p.totalProblems} solved${p.daysSinceLatest != null ? " · " + formatDaysAgo(p.daysSinceLatest) : ""}</div>
-    </article>
-  `).join("");
+  grid.innerHTML = ctx.patterns.map(p => {
+    const pct = p.totalProblems > 0 ? (p.uniqueSolved / p.totalProblems * 100) : 0;
+    const scoreTxt = p.score != null ? p.score.toFixed(1) : "·";
+    const scoreCls = p.score == null ? "p-tile-score-empty" : "";
+    const metaRight = p.daysSinceLatest != null ? formatDaysAgo(p.daysSinceLatest) : "untouched";
+    return `
+      <article class="p-tile p-${p.band}" data-pattern="${esc(p.name)}">
+        <div class="p-tile-stripe"></div>
+        <div class="p-tile-top">
+          <div class="p-tile-name">${esc(p.name)}</div>
+          <div class="p-tile-score ${scoreCls}">${scoreTxt}</div>
+        </div>
+        <div class="p-tile-bar">
+          <span class="p-tile-fill" style="width:${pct.toFixed(1)}%"></span>
+        </div>
+        <div class="p-tile-foot">
+          <span>${p.uniqueSolved}/${p.totalProblems}</span>
+          <span>${metaRight}</span>
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function wire(root) {
@@ -267,7 +351,6 @@ function wire(root) {
     openPatternDetail(root, tile.dataset.pattern);
   });
 
-  // Shaky-card click → open the Problem page for that row
   root.querySelector("#m-shaky-row")?.addEventListener("click", (e) => {
     const card = e.target.closest?.(".shaky-card");
     if (!card) return;
@@ -290,7 +373,6 @@ function openPatternDetail(root, patternName) {
   band.className = `m-d-eyebrow band-${pattern.band}`;
   band.textContent = BAND_LABELS[pattern.band] || pattern.band;
 
-  // Collect last 10 solves across every problem in this pattern (for sparkline)
   const allSolves = [];
   for (const [key, meta] of ctx.rowIndex.entries()) {
     if (meta.pattern !== patternName) continue;
@@ -312,7 +394,6 @@ function openPatternDetail(root, patternName) {
     ${sparkHtml ? `<div class="m-d-spark"><label>Last ${spark.length} solves →</label>${sparkHtml}</div>` : ""}
   `;
 
-  // List problems in this pattern
   const problemList = [];
   for (const [key, meta] of ctx.rowIndex.entries()) {
     if (meta.pattern !== patternName) continue;
@@ -365,7 +446,6 @@ function openPatternDetail(root, patternName) {
     </div>
   `;
 
-  // Wire add-to-today
   body.querySelectorAll("[data-act=\"add\"]").forEach(btn => {
     btn.addEventListener("click", async (ev) => {
       ev.preventDefault();
@@ -411,7 +491,6 @@ async function addToToday(sheetName, rowIndex, btn) {
 }
 
 function renderSparkline(solves) {
-  // solves: [{stars, daysAgo}] ordered oldest → newest
   const W = 180, H = 32, pad = 4;
   if (!solves.length) return "";
   const xs = solves.map((_, i) => pad + (i * (W - pad * 2) / Math.max(1, solves.length - 1)));
@@ -424,6 +503,12 @@ function renderSparkline(solves) {
       ${dots}
     </svg>
   `;
+}
+
+// Render 5 star glyphs with filled stars for the given score (rounded).
+function renderStarRow(score) {
+  const n = Math.max(0, Math.min(5, Math.round(score)));
+  return `<span class="s-filled">${"★".repeat(n)}</span><span class="s-empty">${"★".repeat(5 - n)}</span>`;
 }
 
 const BAND_LABELS = {
@@ -453,63 +538,179 @@ function injectStyles() {
   s.textContent = `
     .mastery .m-scrim[hidden] { display: none !important; }
     .mastery .m-shaky-sec[hidden] { display: none !important; }
+    .mastery .m-distrib-sec[hidden] { display: none !important; }
 
-    .mastery { padding: 20px 16px 60px; }
-    .m-head { max-width: 920px; margin: 36px auto 32px; }
-    .m-eyebrow { font: 700 11.5px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase; color: var(--gold); margin-bottom: 14px; }
-    .m-title { margin: 0 0 10px; font: 600 44px/1.06 var(--font-sans); letter-spacing: -.025em; color: var(--ink); }
-    .m-sub { font: 400 15px/1.55 var(--font-sans); color: var(--mut); margin: 0; }
+    .mastery { padding: 18px 16px 60px; --m-max: 1120px; }
 
-    .m-sec-h { display: flex; align-items: baseline; gap: 14px; max-width: 1100px; margin: 0 auto 16px; flex-wrap: wrap; }
-    .m-sec-h h2 { margin: 0; font: 600 22px/1.2 var(--font-sans); letter-spacing: -.01em; color: var(--ink); }
-    .m-sec-sub { color: var(--mut); font-size: 13px; }
-    .m-legend { display: inline-flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
-    .m-legend .lg { font: 600 10.5px/1 var(--font-sans); letter-spacing: .06em; padding: 5px 9px; border-radius: 6px; }
-    .m-legend .lg-mastered { background: color-mix(in oklab, var(--green) 20%, var(--paper)); color: var(--green); }
-    .m-legend .lg-solid    { background: color-mix(in oklab, var(--blue, #3870ff) 18%, var(--paper)); color: var(--blue, #3870ff); }
-    .m-legend .lg-shaky    { background: color-mix(in oklab, var(--gold) 24%, var(--paper)); color: var(--gold); }
-    .m-legend .lg-weak     { background: color-mix(in oklab, var(--red) 20%, var(--paper)); color: var(--red); }
-    .m-legend .lg-untouched{ background: var(--bg); color: var(--mut); border: 1px solid var(--line); }
+    /* ---- HERO ---- */
+    .m-head {
+      max-width: var(--m-max); margin: 24px auto 22px;
+      display: grid; grid-template-columns: 1fr auto; gap: 32px; align-items: end;
+    }
+    .m-head-left { min-width: 0; }
+    .m-eyebrow { font: 700 11.5px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase; color: var(--gold); margin-bottom: 12px; }
+    .m-title { margin: 0 0 10px; font: 600 44px/1.04 var(--font-sans); letter-spacing: -.028em; color: var(--ink); }
+    .m-motiv { font: 400 15px/1.5 var(--font-sans); color: var(--mut); margin: 0; max-width: 56ch; }
+    .m-motiv b { color: var(--ink); font-weight: 600; }
 
-    /* Shaky spots row */
-    .m-shaky-sec { max-width: 1100px; margin: 0 auto 44px; }
-    .m-shaky-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .m-head-right { flex-shrink: 0; }
+    .m-overall {
+      text-align: right;
+      display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
+      padding: 14px 18px 12px;
+      background: linear-gradient(140deg, color-mix(in oklab, var(--gold) 10%, var(--paper)), var(--paper));
+      border: 1px solid color-mix(in oklab, var(--gold) 28%, var(--line));
+      border-radius: 14px;
+      min-width: 160px;
+    }
+    .m-overall-empty {
+      background: var(--paper);
+      border: 1px dashed var(--line2);
+      color: var(--mut);
+    }
+    .m-overall-score { font: 800 36px/1 var(--font-sans); letter-spacing: -.03em; color: var(--ink); }
+    .m-overall-empty .m-overall-score { color: var(--mut); }
+    .m-overall-stars { font: 400 15px/1 var(--font-sans); letter-spacing: .04em; }
+    .m-overall-stars .s-filled { color: var(--gold); }
+    .m-overall-stars .s-empty  { color: color-mix(in oklab, var(--mut) 40%, var(--paper)); }
+    .m-overall-label { font: 500 10.5px/1 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--mut); }
+
+    /* ---- DISTRIBUTION ---- */
+    .m-distrib-sec { max-width: var(--m-max); margin: 0 auto 42px; }
+    .m-distrib-bar {
+      display: flex; gap: 2px; height: 10px; border-radius: 999px; overflow: hidden;
+      background: var(--bg); border: 1px solid var(--line);
+    }
+    .m-db-seg { display: block; height: 100%; min-width: 2px; transition: filter .14s; }
+    .m-db-seg:hover { filter: brightness(1.08); }
+    .m-db-mastered  { background: var(--green); }
+    .m-db-solid     { background: var(--blue, #3870ff); }
+    .m-db-shaky     { background: var(--gold); }
+    .m-db-weak      { background: var(--red); }
+    .m-db-untouched { background: color-mix(in oklab, var(--mut) 25%, var(--paper)); }
+    .m-distrib-legend {
+      display: flex; flex-wrap: wrap; gap: 20px; margin-top: 12px;
+      font: 500 12px/1.3 var(--font-sans); color: var(--mut);
+    }
+    .m-db-leg { display: inline-flex; align-items: center; gap: 7px; }
+    .m-db-leg b { color: var(--ink); font-weight: 700; }
+    .m-db-dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
+
+    /* ---- SECTION HEADERS ---- */
+    .m-sec-h { display: flex; align-items: baseline; gap: 14px; max-width: var(--m-max); margin: 0 auto 14px; flex-wrap: wrap; }
+    .m-sec-h h2 { margin: 0; font: 600 20px/1.2 var(--font-sans); letter-spacing: -.012em; color: var(--ink); }
+    .m-sec-sub { color: var(--mut); font-size: 12.5px; }
+
+    /* ---- SHAKY SPOTS ---- */
+    .m-shaky-sec { max-width: var(--m-max); margin: 0 auto 46px; }
+    .m-shaky-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
     .shaky-card {
-      padding: 14px 16px;
-      background: var(--paper); border: 1px solid var(--line); border-left: 3px solid var(--red);
-      border-radius: 10px; cursor: pointer;
-      transition: all .18s ease;
+      position: relative;
+      padding: 13px 32px 12px 16px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 11px;
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+      overflow: hidden;
+      display: flex; flex-direction: column; gap: 6px;
     }
-    .shaky-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.08); border-color: var(--red); }
-    .sh-stars { font: 600 13px/1 var(--font-sans); color: var(--red); letter-spacing: .04em; margin-bottom: 8px; }
-    .sh-title { font: 600 14px/1.3 var(--font-sans); color: var(--ink); margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .sh-meta { font: 500 11px/1.3 var(--font-sans); color: var(--mut); margin-bottom: 10px; letter-spacing: .02em; }
-    .sh-foot { font: 500 10.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .04em; }
+    .shaky-card::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    }
+    .shaky-card.sev-high::before { background: var(--red); }
+    .shaky-card.sev-mid::before  { background: var(--gold); }
+    .shaky-card.sev-low::before  { background: var(--blue, #3870ff); }
+    .shaky-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,.08); border-color: var(--line2); }
+    .shaky-card:hover .sh-arrow { transform: translateX(4px); opacity: 1; }
 
-    /* Pattern grid */
-    .m-grid-sec { max-width: 1100px; margin: 0 auto; }
-    .m-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+    .sh-top { display: flex; justify-content: space-between; align-items: center; }
+    .sh-stars { font: 600 13px/1 var(--font-sans); letter-spacing: .06em; }
+    .sh-stars .s-filled { color: var(--red); }
+    .sev-mid  .sh-stars .s-filled { color: var(--gold); }
+    .sev-low  .sh-stars .s-filled { color: var(--blue, #3870ff); }
+    .sh-stars .s-empty  { color: color-mix(in oklab, var(--mut) 35%, var(--paper)); }
+    .sh-days { font: 600 10.5px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--mut); }
+    .sh-title { font: 600 14px/1.3 var(--font-sans); color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .sh-foot { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 2px; }
+    .sh-pattern { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .02em; }
+    .sh-arrow {
+      position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+      font: 600 15px/1 var(--font-sans); color: var(--mut);
+      opacity: .5; transition: transform .18s ease, opacity .18s ease;
+    }
+
+    /* ---- PATTERN GRID ---- */
+    .m-grid-sec { max-width: var(--m-max); margin: 0 auto; }
+    .m-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 10px;
+    }
     .p-tile {
-      padding: 14px 14px 12px;
-      border-radius: 10px; cursor: pointer;
+      position: relative;
+      padding: 13px 14px 11px;
+      background: var(--paper);
       border: 1px solid var(--line);
-      transition: all .18s ease;
-      position: relative; overflow: hidden;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+      overflow: hidden;
+      display: flex; flex-direction: column; gap: 8px;
     }
-    .p-tile:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
-    .p-mastered { background: color-mix(in oklab, var(--green) 14%, var(--paper)); border-color: color-mix(in oklab, var(--green) 30%, var(--line)); }
-    .p-solid    { background: color-mix(in oklab, var(--blue, #3870ff) 11%, var(--paper)); border-color: color-mix(in oklab, var(--blue, #3870ff) 26%, var(--line)); }
-    .p-shaky    { background: color-mix(in oklab, var(--gold) 15%, var(--paper)); border-color: color-mix(in oklab, var(--gold) 32%, var(--line)); }
-    .p-weak     { background: color-mix(in oklab, var(--red) 12%, var(--paper)); border-color: color-mix(in oklab, var(--red) 28%, var(--line)); }
-    .p-untouched{ background: var(--bg); border-color: var(--line); color: var(--mut); }
+    .p-tile:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 22px rgba(0,0,0,.08);
+    }
+    .p-tile-stripe {
+      position: absolute; left: 0; top: 0; right: 0; height: 3px;
+    }
+    .p-mastered  .p-tile-stripe { background: var(--green); }
+    .p-solid     .p-tile-stripe { background: var(--blue, #3870ff); }
+    .p-shaky     .p-tile-stripe { background: var(--gold); }
+    .p-weak      .p-tile-stripe { background: var(--red); }
+    .p-untouched .p-tile-stripe { background: color-mix(in oklab, var(--mut) 20%, var(--paper)); }
 
-    .p-tile-name { font: 700 13.5px/1.3 var(--font-sans); color: var(--ink); margin-bottom: 10px; }
-    .p-untouched .p-tile-name { color: var(--mut); }
-    .p-tile-score { font: 800 24px/1 var(--font-sans); letter-spacing: -.02em; color: var(--ink); margin-bottom: 6px; }
-    .p-untouched .p-tile-score { color: color-mix(in oklab, var(--mut) 60%, var(--paper)); }
-    .p-tile-meta { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .02em; }
+    .p-mastered  { background: color-mix(in oklab, var(--green) 7%, var(--paper)); border-color: color-mix(in oklab, var(--green) 20%, var(--line)); }
+    .p-solid     { background: color-mix(in oklab, var(--blue, #3870ff) 6%, var(--paper)); border-color: color-mix(in oklab, var(--blue, #3870ff) 18%, var(--line)); }
+    .p-shaky     { background: color-mix(in oklab, var(--gold) 8%, var(--paper)); border-color: color-mix(in oklab, var(--gold) 24%, var(--line)); }
+    .p-weak      { background: color-mix(in oklab, var(--red) 7%, var(--paper)); border-color: color-mix(in oklab, var(--red) 22%, var(--line)); }
+    .p-untouched { background: var(--paper); border-color: var(--line); }
+    .p-untouched { opacity: .78; }
+    .p-untouched:hover { opacity: 1; }
 
-    /* Detail */
+    .p-tile-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-top: 2px; }
+    .p-tile-name {
+      font: 600 13px/1.3 var(--font-sans); color: var(--ink);
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      min-width: 0; flex: 1;
+    }
+    .p-untouched .p-tile-name { color: color-mix(in oklab, var(--ink) 70%, var(--mut)); }
+    .p-tile-score {
+      font: 800 20px/1 var(--font-sans); letter-spacing: -.025em; color: var(--ink);
+      flex-shrink: 0; margin-top: 1px;
+    }
+    .p-mastered  .p-tile-score { color: var(--green); }
+    .p-solid     .p-tile-score { color: var(--blue, #3870ff); }
+    .p-shaky     .p-tile-score { color: color-mix(in oklab, var(--gold) 85%, var(--ink)); }
+    .p-weak      .p-tile-score { color: var(--red); }
+    .p-tile-score-empty { color: color-mix(in oklab, var(--mut) 60%, var(--paper)) !important; font-weight: 500 !important; }
+
+    .p-tile-bar {
+      height: 4px; border-radius: 999px;
+      background: color-mix(in oklab, var(--line) 60%, transparent);
+      overflow: hidden;
+    }
+    .p-tile-fill { display: block; height: 100%; border-radius: 999px; }
+    .p-mastered  .p-tile-fill { background: var(--green); }
+    .p-solid     .p-tile-fill { background: var(--blue, #3870ff); }
+    .p-shaky     .p-tile-fill { background: var(--gold); }
+    .p-weak      .p-tile-fill { background: var(--red); }
+    .p-untouched .p-tile-fill { background: color-mix(in oklab, var(--mut) 30%, var(--paper)); }
+
+    .p-tile-foot {
+      display: flex; justify-content: space-between; align-items: center;
+      font: 500 10.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .04em;
+    }
+
+    /* ---- DETAIL MODAL ---- */
     .m-scrim {
       position: fixed; inset: 0; z-index: 1500;
       background: rgba(0,0,0,.6); backdrop-filter: blur(10px);
@@ -555,7 +756,7 @@ function injectStyles() {
     .m-prow:hover { background: var(--bg); border-color: var(--line2); transform: translateX(2px); }
     .m-prow-main { min-width: 0; flex: 1; }
     .m-prow-title { font: 600 13.5px/1.3 var(--font-sans); color: var(--ink); margin-bottom: 2px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-    .m-prow-meta { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .02em; }
+    .m-prow-meta { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .02em; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .m-prow-right { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
     .m-prow-stars { font: 600 12.5px/1 var(--font-sans); color: var(--gold); letter-spacing: .04em; }
     .m-prow-stars .s-faint { color: color-mix(in oklab, var(--mut) 50%, var(--paper)); }
@@ -578,6 +779,12 @@ function injectStyles() {
     .m-d-spark { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
     .m-d-spark label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
     .m-spark-svg { flex: 1; }
+
+    @media (max-width: 760px) {
+      .m-head { grid-template-columns: 1fr; align-items: start; gap: 20px; }
+      .m-overall { align-self: start; }
+      .m-title { font-size: 36px; }
+    }
   `;
   document.head.appendChild(s);
 }
