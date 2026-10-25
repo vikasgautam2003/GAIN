@@ -86,11 +86,6 @@ function startQuoteRotation(root) {
 function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
   return `
     <div class="view-inner today">
-      <!-- Always-visible floating Hideout escape pill → the lounge -->
-      <a class="chill-float" href="#chill" title="The Hideout — your lounge" aria-label="Hideout">
-        <span class="cfx-ball"></span>
-        <span class="cfx-label">Hideout</span>
-      </a>
       <div class="hero-eyebrow">${dateStr}</div>
       <h1 class="hero-title">Make today count.</h1>
       <p class="hero-sub">Small, focused sessions. Real progress over time.</p>
