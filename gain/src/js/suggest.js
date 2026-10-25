@@ -8,6 +8,7 @@
 import { getSheets, getDayLog, getSettings, getWallet, callGrok, secure, updateDayLog, updateWallet, KIND_TO_SHEET } from "./store.js";
 import { todayKey, activeKey, priceTask } from "./engine.js";
 import { renderMarkdown } from "./info.js";
+import { callGroqJSON } from "./groqJson.js";
 
 const TOPIC_OPTIONS = [
   { kind: "dsa", label: "DSA",            icon: "⚡" },
@@ -348,21 +349,21 @@ Reply as JSON only:
 No markdown. No preamble. The pickIndex MUST be between 1 and ${pool.length}.
   `.trim();
 
-  const res = await callGrok({
+  const res = await callGroqJSON({
     apiKey,
-    jsonMode: true,
-    maxTokens: 256,
-    temperature: 0.5,
+    maxTokens: 384,
     system: `You are a GAIN FDE interview-prep librarian. Pick ONE study problem BY INDEX from the user's own pool that maximizes learning right now. Weigh: (1) weakest pattern, (2) weekly theme, (3) classic coverage. The pickIndex is an integer 1-N; invalid indexes break the app, so stay in range.`,
     user,
+    label: "suggest",
+    schemaCheck: (obj) => {
+      if (!obj || typeof obj !== "object") return "not an object";
+      const idx = Number.isInteger(obj.pickIndex) ? obj.pickIndex : parseInt(obj.pickIndex, 10);
+      if (!Number.isInteger(idx) || idx < 1 || idx > pool.length) return `pickIndex out of range (got ${obj.pickIndex}, pool size ${pool.length})`;
+      return true;
+    },
   });
-
-  if (!res.ok) throw new Error(res.error || "Groq call failed");
-  let parsed;
-  try {
-    const raw = res.content.trim().replace(/^```json\s*|\s*```$/g, "");
-    parsed = JSON.parse(raw);
-  } catch (_) { throw new Error("Couldn't parse response."); }
+  if (!res.ok) throw new Error(res.error);
+  const parsed = res.data;
 
   // -------- Index-based pick with hard validation --------
   const rawIdx = parsed.pickIndex;

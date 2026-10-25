@@ -5,6 +5,7 @@
 import { getDayLog, getSheets, getWallet, getSettings, callGrok, secure } from "./store.js";
 import { todayKey, calendarKey } from "./engine.js";
 import { renderMarkdown } from "./info.js";
+import { callGroqJSON } from "./groqJson.js";
 
 const FIRED_KEY_PREFIX = "gain:recapFiredOn:";
 
@@ -207,23 +208,23 @@ async function openRecapModal({ dateKey, day, reason }) {
         return;
       }
       const ctx = buildGroqContext(stats, day);
-      const res = await callGrok({
+      const res = await callGroqJSON({
         apiKey,
-        jsonMode: true,
+        maxTokens: 1024,
         system: `You are GAIN's honest FDE interview-prep butler. The user has finished today's grind.
 Reply in STRICT JSON with keys "reflection" (string, 3 short sentences, interview-tone, keyword-dense, name specific patterns, no fluff) and "focus" (array of exactly 3 short strings, each a concrete action for tomorrow — reference specific patterns/problems/behaviors, each under 100 chars).
 No markdown. No preamble. JSON only.`,
-        user: ctx
+        user: ctx,
+        label: "recap",
+        schemaCheck: (obj) => {
+          if (!obj || typeof obj !== "object") return "not an object";
+          if (typeof obj.reflection !== "string" || !obj.reflection.trim()) return "reflection missing";
+          if (!Array.isArray(obj.focus) || obj.focus.length < 1) return "focus array missing";
+          return true;
+        },
       });
-      if (!res.ok) throw new Error(res.error || "Groq call failed");
-
-      let parsed;
-      try {
-        const raw = res.content.trim().replace(/^```json\s*|\s*```$/g, "");
-        parsed = JSON.parse(raw);
-      } catch (_) {
-        throw new Error("Couldn't parse the butler's response.");
-      }
+      if (!res.ok) throw new Error(res.error);
+      const parsed = res.data;
 
       reflectionEl.innerHTML = `<p>${renderMarkdown(parsed.reflection || "No reflection today — try the regenerate button.")}</p>`;
       const bullets = Array.isArray(parsed.focus) ? parsed.focus.slice(0, 3) : [];
