@@ -158,7 +158,11 @@ function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
             </div>
             <div class="add-row">
               <button class="plus" id="add-task-toggle" aria-label="Task options" aria-expanded="false" title="Options · minutes, bounty, kind, status">+</button>
-              <input id="add-task-input" placeholder="Add a one-off task for today…" />
+              <div class="add-input-wrap">
+                <div class="add-pickchip" id="add-pickchip" hidden></div>
+                <input id="add-task-input" placeholder="Add a one-off task for today…" autocomplete="off" />
+                <div class="add-suggest" id="add-suggest" hidden></div>
+              </div>
               <button class="icon-btn" id="add-task-btn" aria-label="Add">→</button>
             </div>
             <div class="add-row-ex" id="add-row-ex" hidden>
@@ -1399,6 +1403,121 @@ function attachHandlers(root) {
     if (!expanded) setTimeout(() => addInput.focus(), 20);
   });
 
+  // ── Autocomplete: search user's own sheets as they type ─────────────
+  // Picked suggestion carried over to commit(). ✕ on the chip unlinks.
+  let pickedMatch = null;
+  const suggestEl = root.querySelector("#add-suggest");
+  const pickchipEl = root.querySelector("#add-pickchip");
+  let suggestIdx = -1;
+  let suggestions = [];
+
+  const clearPick = () => {
+    pickedMatch = null;
+    if (pickchipEl) { pickchipEl.hidden = true; pickchipEl.innerHTML = ""; }
+  };
+  const setPick = (match) => {
+    pickedMatch = match;
+    if (!pickchipEl) return;
+    const metaBits = [match.sheetLabel, match.pattern, match.difficulty, match.lcNum ? "LC#" + match.lcNum : null].filter(Boolean);
+    pickchipEl.hidden = false;
+    pickchipEl.innerHTML = `
+      <span class="apk-core">${esc(metaBits.join(" · "))}${match.alreadySolved ? ' <span class="apk-redo">REDO</span>' : ""}</span>
+      <button class="apk-x" type="button" aria-label="Unlink">✕</button>
+    `;
+    pickchipEl.querySelector(".apk-x").addEventListener("click", () => { clearPick(); addInput.focus(); });
+    // Auto-fill expanded panel + kind
+    if (addEx) {
+      const kSel = root.querySelector("#at-kind");
+      if (kSel && match.kind) kSel.value = match.kind;
+      const vInput = root.querySelector("#at-value");
+      if (vInput && match.bounty) vInput.value = String(match.bounty);
+    }
+  };
+
+  const closeSuggest = () => {
+    if (!suggestEl) return;
+    suggestEl.hidden = true;
+    suggestEl.innerHTML = "";
+    suggestIdx = -1;
+    suggestions = [];
+  };
+
+  const renderSuggest = (list, needle) => {
+    if (!suggestEl) return;
+    suggestions = list;
+    if (!list.length && !needle) { closeSuggest(); return; }
+    const items = list.map((m, i) => `
+      <div class="asg-item ${m.alreadySolved ? "solved" : ""} ${i === suggestIdx ? "active" : ""}" data-idx="${i}" role="option">
+        <div class="asg-title">${esc(m.title)}${m.alreadySolved ? ' <span class="asg-solved-tag">✓ solved ${esc(m.solvedAgo || "")}</span>'.replace("${esc(m.solvedAgo || \"\")}", esc(m.solvedAgo || "")) : ""}</div>
+        <div class="asg-meta">${esc(m.sheetLabel)}${m.difficulty ? " · " + esc(m.difficulty) : ""}${m.pattern ? " · " + esc(m.pattern) : ""}${m.lcNum ? " · LC#" + esc(m.lcNum) : ""}${m.freq && /^high$/i.test(m.freq) ? ' <span class="asg-high">HIGH</span>' : ""}</div>
+      </div>
+    `).join("");
+    const addNewRow = needle ? `<div class="asg-item asg-new ${suggestIdx === list.length ? "active" : ""}" data-idx="${list.length}" role="option">
+      <div class="asg-title">+ Add "<b>${esc(needle)}</b>" as a new problem</div>
+      <div class="asg-meta">Creates a fresh row in the matching sheet</div>
+    </div>` : "";
+    suggestEl.innerHTML = items + addNewRow;
+    suggestEl.hidden = false;
+    suggestEl.querySelectorAll(".asg-item").forEach(el => {
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        const i = +el.dataset.idx;
+        if (i < list.length) {
+          addInput.value = list[i].title;
+          setPick(list[i]);
+          closeSuggest();
+        } else {
+          clearPick();
+          closeSuggest();
+        }
+      });
+    });
+  };
+
+  const refreshSuggestions = async () => {
+    const needle = (addInput?.value || "").trim();
+    if (needle.length < 2) { closeSuggest(); return; }
+    // Invalidate any prior pick as soon as the user edits past that match.
+    if (pickedMatch && pickedMatch.title !== needle) clearPick();
+    const { getSheets, SHEET_KINDS } = await import("./store.js");
+    const sheets = getSheets();
+    const list = searchAcrossSheets(sheets, needle);
+    suggestIdx = list.length ? 0 : -1;
+    renderSuggest(list, needle);
+  };
+
+  let suggestDebounce;
+  addInput?.addEventListener("input", () => {
+    clearTimeout(suggestDebounce);
+    suggestDebounce = setTimeout(refreshSuggestions, 120);
+  });
+  addInput?.addEventListener("focus", refreshSuggestions);
+  addInput?.addEventListener("blur", () => { setTimeout(closeSuggest, 180); });
+  addInput?.addEventListener("keydown", (e) => {
+    if (suggestEl?.hidden) return;
+    const total = suggestions.length + (addInput.value.trim() ? 1 : 0);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      suggestIdx = Math.min(total - 1, suggestIdx + 1);
+      renderSuggest(suggestions, addInput.value.trim());
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      suggestIdx = Math.max(0, suggestIdx - 1);
+      renderSuggest(suggestions, addInput.value.trim());
+    } else if (e.key === "Escape") {
+      closeSuggest();
+    } else if (e.key === "Enter") {
+      if (suggestIdx >= 0 && suggestIdx < suggestions.length) {
+        e.preventDefault();
+        const m = suggestions[suggestIdx];
+        addInput.value = m.title;
+        setPick(m);
+        closeSuggest();
+      }
+      // Otherwise let Enter fall through to the commit handler below.
+    }
+  });
+
   const commit = async () => {
     const val = (addInput?.value || "").trim();
     if (!val) return;
@@ -1406,37 +1525,52 @@ function attachHandlers(root) {
     const dateKey = currentKey();
     const ref = `ADHOC-${Date.now()}`;
 
-    // Pull expanded config if the panel is open; else sensible defaults
-    const kind = addEx.hidden ? "revision" : (root.querySelector("#at-kind")?.value || "revision");
-    const minutes = Number(addEx.hidden ? 15 : (root.querySelector("#at-min")?.value || 15));
-    const value = Number(addEx.hidden ? getSettings().wallet.taskMin : (root.querySelector("#at-value")?.value || getSettings().wallet.taskMin));
-    const preDone = !addEx.hidden && root.querySelector("#at-status")?.value === "done";
-
-    // Link to a sheet row when the kind maps to one (dsa/sd/int/ext).
-    // Matches an existing row by title; otherwise appends a new row.
+    // If the user picked a suggestion, use its sheet/row + kind + bounty directly.
     let sheetName = null;
     let rowIndex = null;
-    const mapped = KIND_TO_SHEET[kind];
-    if (mapped && getSheets()[mapped]?.headers?.length) {
-      const sh = getSheets()[mapped];
-      const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
-      if (titleCol) {
-        const needle = val.toLowerCase();
-        const idx = sh.rows.findIndex(r => String(r[titleCol] || "").trim().toLowerCase() === needle);
-        if (idx >= 0) rowIndex = idx;
+    let kind, minutes, value, preDone;
+
+    if (pickedMatch) {
+      sheetName = pickedMatch.sheet;
+      rowIndex = pickedMatch.rowIndex;
+      kind = addEx.hidden ? pickedMatch.kind : (root.querySelector("#at-kind")?.value || pickedMatch.kind);
+      minutes = Number(addEx.hidden ? 25 : (root.querySelector("#at-min")?.value || 25));
+      value = Number(addEx.hidden ? pickedMatch.bounty : (root.querySelector("#at-value")?.value || pickedMatch.bounty));
+      preDone = !addEx.hidden && root.querySelector("#at-status")?.value === "done";
+    } else {
+      kind = addEx.hidden ? "revision" : (root.querySelector("#at-kind")?.value || "revision");
+      minutes = Number(addEx.hidden ? 15 : (root.querySelector("#at-min")?.value || 15));
+      value = Number(addEx.hidden ? getSettings().wallet.taskMin : (root.querySelector("#at-value")?.value || getSettings().wallet.taskMin));
+      preDone = !addEx.hidden && root.querySelector("#at-status")?.value === "done";
+      const mapped = KIND_TO_SHEET[kind];
+      if (mapped && getSheets()[mapped]?.headers?.length) {
+        const sh = getSheets()[mapped];
+        const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+        if (titleCol) {
+          const needle = val.toLowerCase();
+          const idx = sh.rows.findIndex(r => String(r[titleCol] || "").trim().toLowerCase() === needle);
+          if (idx >= 0) rowIndex = idx;
+        }
+        if (rowIndex == null) {
+          const patch = {};
+          if (titleCol) patch[titleCol] = val;
+          rowIndex = await addSheetRow(mapped, patch);
+        }
+        sheetName = mapped;
       }
-      if (rowIndex == null) {
-        const patch = {};
-        if (titleCol) patch[titleCol] = val;
-        rowIndex = await addSheetRow(mapped, patch);
-      }
-      sheetName = mapped;
     }
 
     await updateDayLog(dl => {
       const d = dl[dateKey];
       if (!d) return;
-      const t = { ref, kind, title: val, minutes, value, sheet: sheetName, rowIndex };
+      const t = {
+        ref, kind, title: val, minutes, value,
+        sheet: sheetName, rowIndex,
+        pattern: pickedMatch?.pattern || undefined,
+        difficulty: pickedMatch?.difficulty || undefined,
+        freq: pickedMatch?.freq || undefined,
+        redo: !!pickedMatch?.alreadySolved,
+      };
       d.assigned.push(t);
       d.values[ref] = value;
       if (preDone) {
@@ -1467,13 +1601,116 @@ function attachHandlers(root) {
       }
     }
     addInput.value = "";
+    clearPick();
+    closeSuggest();
     paintPlan(root);
   };
   addBtn?.addEventListener("click", commit);
-  addInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); });
+  // Enter commits only when no suggestion is highlighted (otherwise the keydown
+  // handler above picks the suggestion and swallows the event).
+  addInput?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    if (!suggestEl?.hidden && suggestIdx >= 0 && suggestIdx < suggestions.length) return;
+    commit();
+  });
 
   // jump to Settings for target edits
   root.querySelector("#to-settings")?.addEventListener("click", () => { location.hash = "#settings"; });
+}
+
+// Autocomplete search across every sheet. Match on title column, rank by:
+//   1. prefix match > substring match > word-split fuzzy
+//   2. HIGH-freq boost
+//   3. unsolved before solved (but solved still shown with a muted tag)
+// Returns max 6 ranked matches, each enriched with sheet/row/kind/bounty so
+// the add-row commit can skip the create-or-link dance.
+function searchAcrossSheets(sheets, rawNeedle) {
+  const needle = rawNeedle.trim().toLowerCase();
+  if (needle.length < 2) return [];
+  const words = needle.split(/\s+/).filter(w => w.length >= 2);
+
+  const SHEET_KIND_MAP = {
+    "01_DSA_SHEET.csv": { kind: "dsa", label: "DSA" },
+    "02_SYSTEM_DESIGN_SHEET.csv": { kind: "sd", label: "System Design" },
+    "03_INTEGRATIONS_PLATFORMS_SHEET.csv": { kind: "int", label: "Integrations" },
+    "04_FDE_INTERVIEW_EXTRAS.csv": { kind: "ext", label: "Extras" },
+    "05_SQL_SHEET.csv": { kind: "sql", label: "SQL" },
+  };
+
+  const results = [];
+  for (const [sheetName, sh] of Object.entries(sheets)) {
+    if (!sh || !Array.isArray(sh.rows) || !sh.headers?.length) continue;
+    const meta = SHEET_KIND_MAP[sheetName] || { kind: "dsa", label: sheetName };
+    const titleCol = sh.headers.find(h => /^(problem|topic|skill(\s*or\s*platform)?|item|name)$/i.test(h.replace(/\s+/g, " ").trim()));
+    if (!titleCol) continue;
+    const patternCol = sh.headers.find(h => /^(pattern|category)$/i.test(h));
+    const diffCol = sh.headers.find(h => /^difficulty$/i.test(h));
+    const freqCol = sh.headers.find(h => /^(freq|priority)$/i.test(h));
+    const statusCol = sh.headers.find(h => /^status$/i.test(h));
+    const dateCol = sh.headers.find(h => /^(datesolved|datedone)$/i.test(h));
+    const lcCol = sh.headers.find(h => /^lc#?$/i.test(h));
+    const minsCol = sh.headers.find(h => /^(minutes|time|est)$/i.test(h));
+
+    for (let i = 0; i < sh.rows.length; i++) {
+      const r = sh.rows[i];
+      const title = String(r[titleCol] || "").trim();
+      if (!title) continue;
+      const t = title.toLowerCase();
+
+      // Rank scoring
+      let score = 0;
+      if (t === needle) score = 1000;
+      else if (t.startsWith(needle)) score = 800;
+      else if (t.includes(needle)) score = 600;
+      else {
+        // Word-split fuzzy: every word in needle must appear as a substring somewhere in title.
+        const allHit = words.length > 0 && words.every(w => t.includes(w));
+        if (allHit) score = 400;
+      }
+      if (score === 0) continue;
+
+      const freq = freqCol ? String(r[freqCol] || "").trim() : "";
+      if (/^high$/i.test(freq)) score += 40;
+
+      const alreadySolved = statusCol ? /^solved$/i.test(String(r[statusCol] || "")) : false;
+      if (alreadySolved) score -= 100;
+
+      // Bounty computed via engine's priceTask using the row's shape
+      const difficulty = diffCol ? String(r[diffCol] || "").trim() : "";
+      const minutes = minsCol ? Number(r[minsCol] || 25) : 25;
+      const bounty = priceTask({ kind: meta.kind, difficulty, freq, minutes }, getSettings());
+
+      results.push({
+        score,
+        title,
+        sheet: sheetName,
+        sheetLabel: meta.label,
+        kind: meta.kind,
+        rowIndex: i,
+        pattern: patternCol ? String(r[patternCol] || "").trim() : "",
+        difficulty,
+        freq,
+        lcNum: lcCol ? String(r[lcCol] || "").trim() : "",
+        alreadySolved,
+        solvedAgo: alreadySolved && dateCol ? relAgo(String(r[dateCol] || "")) : "",
+        bounty,
+      });
+    }
+  }
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, 6);
+}
+
+function relAgo(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + (dateStr.length === 10 ? "T12:00:00" : ""));
+  if (isNaN(d)) return "";
+  const days = Math.round((Date.now() - d.getTime()) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.round(days/7)}w ago`;
+  return `${Math.round(days/30)}mo ago`;
 }
 
 // If rowIndex is missing (e.g. task came from a weekly plan generated before this build),
@@ -2089,8 +2326,69 @@ function styles() {
     .today .add-row input {
       flex: 1; border: none; outline: none; background: transparent;
       font: inherit; color: var(--ink);
+      width: 100%;
     }
     .today .add-row input::placeholder { color: var(--mut); }
+    .today .add-input-wrap { position: relative; flex: 1; display: flex; flex-direction: column; }
+    .today .add-pickchip {
+      display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+      padding: 4px 8px 4px 10px; margin-bottom: 4px;
+      background: color-mix(in oklab, var(--blue) 10%, transparent);
+      border: 1px solid color-mix(in oklab, var(--blue) 32%, var(--line));
+      border-radius: 6px;
+      font: 600 11.5px/1.1 var(--font-sans); color: var(--blue);
+      letter-spacing: .01em;
+    }
+    .today .add-pickchip .apk-core { white-space: nowrap; }
+    .today .add-pickchip .apk-redo {
+      display: inline-block; margin-left: 6px;
+      padding: 2px 5px; border-radius: 4px;
+      background: var(--red); color: #fff; font: 700 9.5px/1 var(--font-sans); letter-spacing: .08em;
+    }
+    .today .add-pickchip .apk-x {
+      border: none; background: transparent; cursor: pointer;
+      color: var(--mut); font: 400 14px/1 var(--font-sans); padding: 0 2px;
+      transition: color .14s;
+    }
+    .today .add-pickchip .apk-x:hover { color: var(--red); }
+    .today .add-suggest {
+      position: absolute; top: 100%; left: -4px; right: -4px; z-index: 50;
+      margin-top: 6px;
+      background: var(--paper); border: 1px solid var(--line2);
+      border-radius: 10px;
+      box-shadow: 0 14px 40px rgba(0,0,0,.14);
+      max-height: 320px; overflow-y: auto;
+      animation: addSuggFade .18s ease-out both;
+    }
+    @keyframes addSuggFade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+    .today .asg-item {
+      padding: 9px 12px; cursor: pointer;
+      border-bottom: 1px solid var(--line);
+      display: flex; flex-direction: column; gap: 2px;
+      transition: background .12s;
+    }
+    .today .asg-item:last-child { border-bottom: none; }
+    .today .asg-item:hover, .today .asg-item.active { background: color-mix(in oklab, var(--blue) 7%, transparent); }
+    .today .asg-item.solved { opacity: .62; }
+    .today .asg-item.solved .asg-title { color: var(--mut); }
+    .today .asg-title { font: 600 13px/1.3 var(--font-sans); color: var(--ink); }
+    .today .asg-meta { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .01em; }
+    .today .asg-high {
+      display: inline-block; margin-left: 4px;
+      padding: 1px 5px; border-radius: 3px;
+      background: var(--gold); color: var(--paper);
+      font: 700 9px/1 var(--font-sans); letter-spacing: .1em;
+    }
+    .today .asg-solved-tag {
+      margin-left: 8px; font: 500 10.5px/1 var(--font-sans); color: var(--green); letter-spacing: .02em;
+    }
+    .today .asg-new {
+      background: color-mix(in oklab, var(--gold) 6%, var(--paper));
+      border-top: 1px dashed var(--line);
+    }
+    .today .asg-new .asg-title { color: var(--gold); font-weight: 700; }
+    .today .asg-new.active { background: color-mix(in oklab, var(--gold) 14%, var(--paper)); }
+    .today .asg-new b { color: var(--ink); }
 
     .today .add-row-ex {
       display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-3);
