@@ -141,17 +141,27 @@ function render() {
       }
       .lib .lib-cfilter .cf-all { padding: 0 4px; }
       .lib .lib-cfilter .cf-name { white-space: nowrap; }
-      .lib .co-cell { padding: 6px 8px !important; position: relative; min-width: 180px; white-space: nowrap; }
-      .lib .co-cell-chips { display: inline-flex; align-items: center; gap: 3px; pointer-events: none; white-space: nowrap; }
-      .lib .co-cell-more { font: 600 10.5px/1 var(--font-sans); color: var(--mut); margin-left: 2px; }
+      .lib .co-cell { padding: 6px 8px !important; position: relative; min-width: 220px; white-space: nowrap; vertical-align: middle; }
+      .lib .co-cell-chips { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; pointer-events: none; }
+      .lib .co-cell-more { font: 600 10.5px/1 var(--font-sans); color: var(--mut); margin-left: 4px; }
+      /* Input layered on top of the chips but fully invisible until the cell is focused */
       .lib .co-cell-input {
-        position: absolute; inset: 0; width: 100%; height: 100%;
-        padding: 6px 8px; background: transparent; border: none; color: transparent;
-        font: 400 12px/1.4 var(--font-sans); z-index: 2;
+        position: absolute !important; inset: 0; width: 100% !important; height: 100%;
+        padding: 6px 8px !important; background: transparent !important; border: none !important;
+        color: transparent !important; opacity: 0;
+        font: 400 12px/1.4 var(--font-sans); z-index: 2; cursor: text;
       }
-      .lib .co-cell-input:focus { background: var(--paper); color: var(--ink); outline: 2px solid var(--blue); outline-offset: -2px; }
-      .lib .co-cell-input:focus ~ .co-cell-chips { opacity: 0; }
-      .lib .co-cell-empty .co-cell-input { color: var(--mut); position: static; height: auto; padding: 4px 6px; }
+      .lib .co-cell:focus-within .co-cell-chips { opacity: 0; }
+      .lib .co-cell:focus-within .co-cell-input {
+        opacity: 1;
+        color: var(--ink) !important;
+        background: var(--paper) !important;
+        outline: 2px solid var(--blue); outline-offset: -2px;
+      }
+      .lib .co-cell-empty .co-cell-input {
+        position: static !important; opacity: 1 !important; height: auto;
+        color: var(--mut) !important;
+      }
       .lib .co-cell .co-ico { border: 1px solid var(--line); }
       .lib .lib-chip {
         padding: 6px 12px; border-radius: 999px;

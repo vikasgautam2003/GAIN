@@ -198,20 +198,8 @@ function render() {
 
       <section class="m-panel" id="m-panel" aria-live="polite"></section>
 
-      <!-- Pattern detail panel -->
-      <div class="m-scrim" id="m-scrim" hidden>
-        <div class="m-detail" role="dialog">
-          <header class="m-d-head">
-            <div>
-              <div class="m-d-eyebrow" id="m-d-band">—</div>
-              <h2 class="m-d-title" id="m-d-title">—</h2>
-              <div class="m-d-stats" id="m-d-stats">—</div>
-            </div>
-            <button class="m-d-close" id="m-d-close" aria-label="Close">×</button>
-          </header>
-          <div class="m-d-body" id="m-d-body"></div>
-        </div>
-      </div>
+      <!-- Pattern detail — content built fresh in openPatternDetail -->
+      <div class="m-scrim" id="m-scrim" hidden></div>
     </div>
   `;
 }
@@ -496,11 +484,14 @@ function wirePanelClicks(panel, root) {
 }
 
 function wire(root) {
-  const scrim = document.getElementById("m-scrim");
-  const closeDetail = () => { scrim.hidden = true; scrim.dataset.pattern = ""; };
-  document.getElementById("m-d-close")?.addEventListener("click", closeDetail);
-  scrim.addEventListener("click", (e) => { if (e.target === scrim) closeDetail(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !scrim.hidden) closeDetail(); });
+  // Esc closes the detail scrim if open
+  document.addEventListener("keydown", (e) => {
+    const scrim = document.getElementById("m-scrim");
+    if (e.key === "Escape" && scrim && !scrim.hidden) {
+      scrim.hidden = true;
+      scrim.innerHTML = "";
+    }
+  });
 
   // Tab switching
   root.querySelectorAll(".m-tab").forEach(t => {
@@ -509,23 +500,6 @@ function wire(root) {
       paint(root);
     });
   });
-
-  // Old #m-grid delegate — no longer rendered at mount; harmless no-op guard
-  root.querySelector("#m-grid")?.addEventListener("click", (e) => {
-    const tile = e.target.closest?.(".p-tile");
-    if (!tile) return;
-    openPatternDetail(root, tile.dataset.pattern);
-  });
-
-  root.querySelector("#m-shaky-row")?.addEventListener("click", (e) => {
-    const card = e.target.closest?.(".shaky-card");
-    if (!card) return;
-    const [sheet, idxStr] = card.dataset.key.split("#");
-    const idx = Number(idxStr);
-    if (sheet && Number.isFinite(idx)) {
-      location.hash = `#problem/${encodeURIComponent(sheet)}/${idx}`;
-    }
-  });
 }
 
 function openPatternDetail(root, patternName) {
@@ -533,12 +507,9 @@ function openPatternDetail(root, patternName) {
   const pattern = ctx.patterns.find(p => p.name === patternName);
   if (!pattern) return;
   const scrim = document.getElementById("m-scrim");
-  scrim.dataset.pattern = patternName;
-  document.getElementById("m-d-title").textContent = patternName;
-  const band = document.getElementById("m-d-band");
-  band.className = `m-d-eyebrow band-${pattern.band}`;
-  band.textContent = BAND_LABELS[pattern.band] || pattern.band;
+  if (!scrim) return;
 
+  // Compute solves for sparkline
   const allSolves = [];
   for (const [key, meta] of ctx.rowIndex.entries()) {
     if (meta.pattern !== patternName) continue;
@@ -549,17 +520,7 @@ function openPatternDetail(root, patternName) {
   const spark = allSolves.slice(0, 12).reverse();
   const sparkHtml = spark.length ? renderSparkline(spark) : "";
 
-  const statsEl = document.getElementById("m-d-stats");
-  statsEl.innerHTML = `
-    <div class="m-d-stat-row">
-      <span class="m-d-stat"><label>Score</label><b>${pattern.score != null ? pattern.score.toFixed(2) : "—"}</b></span>
-      <span class="m-d-stat"><label>Problems</label><b>${pattern.uniqueSolved}/${pattern.totalProblems}</b></span>
-      <span class="m-d-stat"><label>Solves</label><b>${pattern.solveCount}</b></span>
-      ${pattern.daysSinceLatest != null ? `<span class="m-d-stat"><label>Last</label><b>${formatDaysAgo(pattern.daysSinceLatest)}</b></span>` : ""}
-    </div>
-    ${sparkHtml ? `<div class="m-d-spark"><label>Last ${spark.length} solves →</label>${sparkHtml}</div>` : ""}
-  `;
-
+  // Build problem list sorted weakest-first
   const problemList = [];
   for (const [key, meta] of ctx.rowIndex.entries()) {
     if (meta.pattern !== patternName) continue;
@@ -581,38 +542,63 @@ function openPatternDetail(root, patternName) {
     return a.latestStars - b.latestStars;
   });
 
-  const body = document.getElementById("m-d-body");
-  body.innerHTML = `
-    <div class="m-plist">
-      ${problemList.map(p => {
-        const diffBadge = p.difficulty ? `<span class="m-diff m-diff-${p.difficulty.toLowerCase().replace(/[^a-z]/g, "")}">${esc(p.difficulty)}</span>` : "";
-        const starLine = p.latestStars != null
-          ? `<span class="m-prow-stars">${"★".repeat(p.latestStars)}<span class="s-faint">${"★".repeat(5 - p.latestStars)}</span></span>`
-          : `<span class="m-prow-untouched">unsolved</span>`;
-        return `
-          <div class="m-prow" data-sheet="${esc(p.sheetName)}" data-idx="${p.rowIndex}">
-            <div class="m-prow-left">
-              <div class="m-prow-title">${esc(p.title)}</div>
-              <div class="m-prow-meta">
-                ${diffBadge}
-                ${p.solveCount > 0 ? `<span>${p.solveCount} solve${p.solveCount === 1 ? "" : "s"}</span>` : ""}
-                ${p.daysAgo != null ? `<span>${formatDaysAgo(p.daysAgo)}</span>` : ""}
-              </div>
+  // Build the entire modal HTML in one shot — no stale placeholders can leak
+  const bandLabel = BAND_LABELS[pattern.band] || pattern.band;
+  scrim.innerHTML = `
+    <div class="m-detail" role="dialog" aria-labelledby="m-d-title">
+      <header class="m-d-head">
+        <div class="m-d-head-left">
+          <div class="m-d-eyebrow band-${pattern.band}">${bandLabel}</div>
+          <h2 class="m-d-title" id="m-d-title">${esc(patternName)}</h2>
+          <div class="m-d-stats">
+            <div class="m-d-stat-row">
+              <span class="m-d-stat"><label>Score</label><b>${pattern.score != null ? pattern.score.toFixed(2) : "—"}</b></span>
+              <span class="m-d-stat"><label>Problems</label><b>${pattern.uniqueSolved}/${pattern.totalProblems}</b></span>
+              <span class="m-d-stat"><label>Solves</label><b>${pattern.solveCount}</b></span>
+              ${pattern.daysSinceLatest != null ? `<span class="m-d-stat"><label>Last</label><b>${formatDaysAgo(pattern.daysSinceLatest)}</b></span>` : ""}
             </div>
-            <div class="m-prow-right">
-              ${starLine}
-              <div class="m-prow-actions">
-                <button class="m-prow-btn" data-act="add" title="Add to today's plan">+ Today</button>
-                <a class="m-prow-btn primary" href="#problem/${encodeURIComponent(p.sheetName)}/${p.rowIndex}">Open</a>
-              </div>
-            </div>
+            ${sparkHtml ? `<div class="m-d-spark"><label>Last ${spark.length} solves →</label>${sparkHtml}</div>` : ""}
           </div>
-        `;
-      }).join("")}
+        </div>
+        <button class="m-d-close" id="m-d-close" aria-label="Close">×</button>
+      </header>
+      <div class="m-d-body">
+        <div class="m-plist">
+          ${problemList.map(p => {
+            const diffBadge = p.difficulty ? `<span class="m-diff m-diff-${p.difficulty.toLowerCase().replace(/[^a-z]/g, "")}">${esc(p.difficulty)}</span>` : "";
+            const starLine = p.latestStars != null
+              ? `<span class="m-prow-stars">${"★".repeat(p.latestStars)}<span class="s-faint">${"★".repeat(5 - p.latestStars)}</span></span>`
+              : `<span class="m-prow-untouched">unsolved</span>`;
+            return `
+              <div class="m-prow" data-sheet="${esc(p.sheetName)}" data-idx="${p.rowIndex}">
+                <div class="m-prow-left">
+                  <div class="m-prow-title">${esc(p.title)}</div>
+                  <div class="m-prow-meta">
+                    ${diffBadge}
+                    ${p.solveCount > 0 ? `<span>${p.solveCount} solve${p.solveCount === 1 ? "" : "s"}</span>` : ""}
+                    ${p.daysAgo != null ? `<span>${formatDaysAgo(p.daysAgo)}</span>` : ""}
+                  </div>
+                </div>
+                <div class="m-prow-right">
+                  ${starLine}
+                  <div class="m-prow-actions">
+                    <button class="m-prow-btn" data-act="add" title="Add to today's plan">+ Today</button>
+                    <a class="m-prow-btn primary" href="#problem/${encodeURIComponent(p.sheetName)}/${p.rowIndex}">Open</a>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
     </div>
   `;
 
-  body.querySelectorAll("[data-act=\"add\"]").forEach(btn => {
+  // Re-wire close + "+ Today" (innerHTML wiped the previous handlers)
+  const closeDetail = () => { scrim.hidden = true; scrim.innerHTML = ""; };
+  scrim.querySelector("#m-d-close")?.addEventListener("click", closeDetail);
+  scrim.addEventListener("click", (e) => { if (e.target === scrim) closeDetail(); });
+  scrim.querySelectorAll("[data-act=\"add\"]").forEach(btn => {
     btn.addEventListener("click", async (ev) => {
       ev.preventDefault();
       const row = btn.closest(".m-prow");
