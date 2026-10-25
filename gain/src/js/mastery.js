@@ -227,14 +227,34 @@ function paint(root) {
   }
   const overall = sumW > 0 ? sumSW / sumW : null;
 
+  // Build last-14-days activity sparkline (count of solves per day)
+  const dayCounts = new Array(14).fill(0);
+  for (const solves of ctx.solvesByKey.values()) {
+    for (const s of solves) {
+      const bucket = Math.floor(s.daysAgo);
+      if (bucket >= 0 && bucket < 14) dayCounts[bucket]++;
+    }
+  }
+  const spark14 = dayCounts.slice().reverse(); // oldest first
+  const sparkMax = Math.max(1, ...spark14);
+  const sparkBars = spark14.map((c, i) => {
+    const h = Math.max(2, (c / sparkMax) * 100);
+    const isToday = i === spark14.length - 1;
+    return `<span class="m-spark-bar ${c > 0 ? "has" : ""} ${isToday ? "today" : ""}" style="height:${h}%" title="${c} solve${c === 1 ? "" : "s"}"></span>`;
+  }).join("");
+
   // Hero stat chip
   const headRight = root.querySelector("#m-head-right");
   if (overall != null) {
     headRight.innerHTML = `
       <div class="m-overall">
-        <div class="m-overall-score">${overall.toFixed(1)}</div>
-        <div class="m-overall-stars">${renderStarRow(overall)}</div>
+        <div class="m-overall-top">
+          <div class="m-overall-score">${overall.toFixed(1)}</div>
+          <div class="m-overall-stars">${renderStarRow(overall)}</div>
+        </div>
         <div class="m-overall-label">overall ★ · ${totalSolves} solve${totalSolves === 1 ? "" : "s"}</div>
+        <div class="m-spark14" title="Last 14 days of solve activity">${sparkBars}</div>
+        <div class="m-spark14-label">14-day activity</div>
       </div>
     `;
   } else {
@@ -757,16 +777,17 @@ function injectStyles() {
     .m-head-right { flex-shrink: 0; }
     .m-overall {
       position: relative; text-align: right;
-      display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
-      padding: 16px 20px 14px;
+      display: flex; flex-direction: column; gap: 4px; align-items: flex-end;
+      padding: 18px 22px 16px;
       background:
-        radial-gradient(120% 100% at 100% 0%, color-mix(in oklab, var(--gold) 16%, var(--paper)) 0%, var(--paper) 70%);
-      border: 1px solid color-mix(in oklab, var(--gold) 32%, var(--line));
-      border-radius: 16px;
-      min-width: 180px;
+        radial-gradient(130% 110% at 100% 0%, color-mix(in oklab, var(--gold) 18%, var(--paper)) 0%, var(--paper) 72%);
+      border: 1px solid color-mix(in oklab, var(--gold) 34%, var(--line));
+      border-radius: 18px;
+      min-width: 240px;
       box-shadow:
         0 1px 0 var(--paper) inset,
-        0 20px 36px -24px color-mix(in oklab, var(--gold) 60%, transparent);
+        0 24px 44px -24px color-mix(in oklab, var(--gold) 60%, transparent),
+        0 4px 10px rgba(0,0,0,.04);
     }
     .m-overall::after {
       content: ""; position: absolute; left: 10%; right: 10%; top: 0; height: 1px;
@@ -779,12 +800,35 @@ function injectStyles() {
       color: var(--mut); box-shadow: none;
     }
     .m-overall-empty::after { display: none; }
-    .m-overall-score { font: 800 40px/1 var(--font-sans); letter-spacing: -.035em; color: var(--ink); }
+    .m-overall-top { display: flex; align-items: baseline; gap: 12px; justify-content: flex-end; }
+    .m-overall-score { font: 800 44px/1 var(--font-sans); letter-spacing: -.04em; color: var(--ink); }
     .m-overall-empty .m-overall-score { color: var(--mut); font-weight: 500; }
-    .m-overall-stars { font: 400 16px/1 var(--font-sans); letter-spacing: .06em; }
+    .m-overall-stars { font: 400 15px/1 var(--font-sans); letter-spacing: .06em; }
     .m-overall-stars .s-filled { color: var(--gold); text-shadow: 0 0 10px color-mix(in oklab, var(--gold) 40%, transparent); }
     .m-overall-stars .s-empty  { color: color-mix(in oklab, var(--mut) 35%, var(--paper)); }
     .m-overall-label { font: 500 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
+
+    /* 14-day activity sparkline inside the overall card */
+    .m-spark14 {
+      display: flex; align-items: flex-end; justify-content: flex-end;
+      gap: 2px; height: 28px; margin-top: 10px;
+    }
+    .m-spark-bar {
+      display: block; width: 5px; border-radius: 2px;
+      background: color-mix(in oklab, var(--mut) 20%, var(--paper));
+      transition: filter .14s ease;
+    }
+    .m-spark-bar.has {
+      background: linear-gradient(180deg, color-mix(in oklab, var(--gold) 90%, white), var(--gold));
+    }
+    .m-spark-bar.today {
+      background: linear-gradient(180deg, var(--ink), color-mix(in oklab, var(--ink) 85%, var(--gold)));
+      box-shadow: 0 0 6px color-mix(in oklab, var(--gold) 40%, transparent);
+    }
+    .m-spark14-label {
+      font: 500 9.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase;
+      color: var(--mut); margin-top: 6px;
+    }
 
     /* ---- DISTRIBUTION BAR (prominent, counts inside segments) ---- */
     .m-distrib-sec { max-width: var(--m-max); margin: 24px auto 46px; }
