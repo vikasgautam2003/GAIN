@@ -273,12 +273,16 @@ function paint(root) {
     ];
     bar.innerHTML = bands.filter(b => b.c > 0).map(b => {
       const pct = (b.c / total * 100).toFixed(2);
-      return `<span class="m-db-seg m-db-${b.k}" style="width:${pct}%" title="${b.c} ${b.label}"></span>`;
+      // Show count inside segment only if it's wide enough (>= 6%)
+      const showCount = (b.c / total * 100) >= 6;
+      return `<span class="m-db-seg m-db-${b.k}" style="width:${pct}%" title="${b.c} ${b.label}">
+        ${showCount ? `<span class="m-db-seg-count">${b.c}</span>` : ""}
+      </span>`;
     }).join("");
     legend.innerHTML = bands.map(b => `
       <span class="m-db-leg">
         <span class="m-db-dot m-db-${b.k}"></span>
-        <b>${b.c}</b> ${b.label}
+        <b>${b.c}</b> <span class="m-db-leg-label">${b.label}</span>
       </span>
     `).join("");
   } else {
@@ -306,12 +310,13 @@ function paint(root) {
 }
 
 function renderOverviewPanel(ctx, weakest) {
-  // Top 4 most mastered patterns (score ≥ 3) sorted desc, for a positive signal
+  // Top 4 strongest patterns by score (highest-first) — a positive signal
   const strongest = ctx.patterns.filter(p => p.score != null).slice().sort((a, b) => b.score - a.score).slice(0, 4);
   return `
     <div class="m-ov-grid">
       <div class="m-ov-col">
         <div class="m-sec-h m-sec-h-inner">
+          <span class="m-sec-marker m-sec-marker-warn"></span>
           <h2>Shaky spots</h2>
           <span class="m-sec-sub">Top ${weakest.length} most likely to slip</span>
         </div>
@@ -324,6 +329,7 @@ function renderOverviewPanel(ctx, weakest) {
       ${strongest.length > 0 ? `
       <div class="m-ov-col">
         <div class="m-sec-h m-sec-h-inner">
+          <span class="m-sec-marker m-sec-marker-good"></span>
           <h2>Your strongest</h2>
           <span class="m-sec-sub">Highest recency-weighted ★</span>
         </div>
@@ -335,8 +341,11 @@ function renderOverviewPanel(ctx, weakest) {
                 <div class="p-tile-name">${esc(p.name)}</div>
                 <div class="p-tile-score">${p.score.toFixed(1)}</div>
               </div>
+              <div class="p-tile-bar">
+                <span class="p-tile-fill" style="width:${(p.uniqueSolved / Math.max(1, p.totalProblems) * 100).toFixed(1)}%"></span>
+              </div>
               <div class="p-tile-foot">
-                <span>${p.uniqueSolved}/${p.totalProblems}</span>
+                <span>${p.uniqueSolved}/${p.totalProblems} solved</span>
                 <span>${p.daysSinceLatest != null ? formatDaysAgo(p.daysSinceLatest) : ""}</span>
               </div>
             </article>
@@ -777,33 +786,65 @@ function injectStyles() {
     .m-overall-stars .s-empty  { color: color-mix(in oklab, var(--mut) 35%, var(--paper)); }
     .m-overall-label { font: 500 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
 
-    /* ---- DISTRIBUTION ---- */
-    .m-distrib-sec { max-width: var(--m-max); margin: 24px auto 42px; }
+    /* ---- DISTRIBUTION BAR (prominent, counts inside segments) ---- */
+    .m-distrib-sec { max-width: var(--m-max); margin: 24px auto 46px; }
     .m-distrib-bar {
-      display: flex; gap: 2px; height: 12px; border-radius: 999px; overflow: hidden;
-      background: var(--bg); border: 1px solid var(--line);
-      box-shadow: 0 1px 2px rgba(0,0,0,.04) inset;
+      display: flex; gap: 3px; height: 38px; border-radius: 12px; overflow: hidden;
+      background: color-mix(in oklab, var(--mut) 8%, var(--paper));
+      border: 1px solid var(--line);
+      box-shadow: 0 1px 2px rgba(0,0,0,.04) inset, 0 1px 0 var(--paper);
     }
-    .m-db-seg { display: block; height: 100%; min-width: 2px; transition: filter .14s; }
-    .m-db-seg:hover { filter: brightness(1.08); }
-    .m-db-mastered  { background: var(--green); }
-    .m-db-solid     { background: var(--blue, #3870ff); }
-    .m-db-shaky     { background: var(--gold); }
-    .m-db-weak      { background: var(--red); }
-    .m-db-untouched { background: color-mix(in oklab, var(--mut) 25%, var(--paper)); }
+    .m-db-seg {
+      display: flex; align-items: center; justify-content: center;
+      height: 100%; min-width: 4px;
+      transition: filter .16s ease, transform .18s ease;
+      position: relative;
+    }
+    .m-db-seg:hover { filter: brightness(1.08); z-index: 1; }
+    .m-db-seg:first-child { border-radius: 9px 2px 2px 9px; }
+    .m-db-seg:last-child { border-radius: 2px 9px 9px 2px; }
+    .m-db-seg:only-child { border-radius: 9px; }
+    .m-db-seg-count {
+      font: 700 13px/1 var(--font-sans); color: #fff;
+      letter-spacing: -.01em;
+      text-shadow: 0 1px 2px rgba(0,0,0,.18);
+    }
+    .m-db-mastered  { background: linear-gradient(180deg, color-mix(in oklab, var(--green) 92%, white) 0%, var(--green) 100%); }
+    .m-db-solid     { background: linear-gradient(180deg, color-mix(in oklab, var(--blue, #3870ff) 92%, white) 0%, var(--blue, #3870ff) 100%); }
+    .m-db-shaky     { background: linear-gradient(180deg, color-mix(in oklab, var(--gold) 92%, white) 0%, var(--gold) 100%); }
+    .m-db-weak      { background: linear-gradient(180deg, color-mix(in oklab, var(--red) 92%, white) 0%, var(--red) 100%); }
+    .m-db-untouched { background: linear-gradient(180deg, color-mix(in oklab, var(--mut) 20%, var(--paper)) 0%, color-mix(in oklab, var(--mut) 30%, var(--paper)) 100%); }
+    .m-db-untouched .m-db-seg-count { color: var(--mut); text-shadow: none; }
+
     .m-distrib-legend {
-      display: flex; flex-wrap: wrap; gap: 20px; margin-top: 12px;
-      font: 500 12px/1.3 var(--font-sans); color: var(--mut);
+      display: flex; flex-wrap: wrap; gap: 24px; margin-top: 16px;
+      font: 500 12.5px/1 var(--font-sans); color: var(--mut);
     }
-    .m-db-leg { display: inline-flex; align-items: center; gap: 7px; }
-    .m-db-leg b { color: var(--ink); font-weight: 700; }
-    .m-db-dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
+    .m-db-leg { display: inline-flex; align-items: center; gap: 8px; }
+    .m-db-leg b { color: var(--ink); font-weight: 700; font-size: 13.5px; }
+    .m-db-leg-label { letter-spacing: .01em; }
+    .m-db-dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
 
     /* ---- SECTION HEADERS ---- */
-    .m-sec-h { display: flex; align-items: baseline; gap: 14px; max-width: var(--m-max); margin: 0 auto 14px; flex-wrap: wrap; }
-    .m-sec-h h2 { margin: 0; font: 600 20px/1.2 var(--font-sans); letter-spacing: -.012em; color: var(--ink); }
-    .m-sec-sub { color: var(--mut); font-size: 12.5px; }
-    .m-sec-h-inner { margin: 0 0 12px; }
+    .m-sec-h { display: flex; align-items: baseline; gap: 16px; max-width: var(--m-max); margin: 0 auto 18px; flex-wrap: wrap; }
+    .m-sec-h h2 {
+      margin: 0; font: 600 22px/1.2 var(--font-sans);
+      letter-spacing: -.018em; color: var(--ink);
+    }
+    .m-sec-sub { color: var(--mut); font-size: 13px; letter-spacing: .005em; }
+    .m-sec-h-inner { margin: 0 0 16px; }
+    .m-sec-marker {
+      display: inline-block; width: 6px; height: 22px; border-radius: 3px;
+      transform: translateY(2px);
+    }
+    .m-sec-marker-warn {
+      background: linear-gradient(180deg, var(--gold), var(--red));
+      box-shadow: 0 0 10px color-mix(in oklab, var(--red) 25%, transparent);
+    }
+    .m-sec-marker-good {
+      background: linear-gradient(180deg, color-mix(in oklab, var(--green) 92%, white), var(--green));
+      box-shadow: 0 0 10px color-mix(in oklab, var(--green) 25%, transparent);
+    }
 
     /* ---- TABS (segmented control) ---- */
     .m-tabs {
@@ -852,7 +893,20 @@ function injectStyles() {
       .m-ov-grid { grid-template-columns: 1.6fr 1fr; gap: 36px; }
     }
     .m-strongest { display: grid; grid-template-columns: 1fr; gap: 10px; }
-    .p-tile-mini .p-tile-bar, .p-tile-mini .p-tile-foot { display: flex; }
+    .p-tile-mini {
+      padding: 16px 18px 14px;
+    }
+    .p-tile-mini .p-tile-top { align-items: center; gap: 12px; }
+    .p-tile-mini .p-tile-name {
+      font: 600 15px/1.3 var(--font-sans); letter-spacing: -.012em;
+    }
+    .p-tile-mini .p-tile-score {
+      font: 800 28px/1 var(--font-sans); letter-spacing: -.03em;
+    }
+    .p-tile-mini .p-tile-foot {
+      display: flex; justify-content: space-between; margin-top: 2px;
+      font: 500 11.5px/1 var(--font-sans);
+    }
 
     /* ---- FILTER BAR ---- */
     .m-filter-bar {
@@ -924,19 +978,32 @@ function injectStyles() {
     .shaky-card:hover .sh-arrow { transform: translateX(6px); opacity: 1; }
 
     .sh-top { display: flex; justify-content: space-between; align-items: center; }
-    .sh-stars { font: 600 13px/1 var(--font-sans); letter-spacing: .06em; }
-    .sh-stars .s-filled { color: var(--red); }
-    .sev-mid  .sh-stars .s-filled { color: var(--gold); }
-    .sev-low  .sh-stars .s-filled { color: var(--blue, #3870ff); }
-    .sh-stars .s-empty  { color: color-mix(in oklab, var(--mut) 35%, var(--paper)); }
-    .sh-days { font: 600 10.5px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--mut); }
-    .sh-title { font: 600 14px/1.3 var(--font-sans); color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .sh-foot { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 2px; }
-    .sh-pattern { font: 500 11px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .02em; }
+    .sh-stars { font: 600 15px/1 var(--font-sans); letter-spacing: .08em; }
+    .sh-stars .s-filled { color: var(--red); filter: drop-shadow(0 0 6px color-mix(in oklab, var(--red) 40%, transparent)); }
+    .sev-mid  .sh-stars .s-filled { color: var(--gold); filter: drop-shadow(0 0 6px color-mix(in oklab, var(--gold) 40%, transparent)); }
+    .sev-low  .sh-stars .s-filled { color: var(--blue, #3870ff); filter: drop-shadow(0 0 6px color-mix(in oklab, var(--blue, #3870ff) 40%, transparent)); }
+    .sh-stars .s-empty  { color: color-mix(in oklab, var(--mut) 30%, var(--paper)); filter: none; }
+    .sh-days {
+      font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase;
+      color: var(--mut); padding: 4px 8px;
+      background: color-mix(in oklab, var(--mut) 10%, transparent);
+      border-radius: 999px;
+    }
+    .sh-title {
+      font: 600 15px/1.3 var(--font-sans); color: var(--ink);
+      letter-spacing: -.012em;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      margin-top: 2px;
+    }
+    .sh-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
+    .sh-pattern {
+      font: 500 11.5px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .01em;
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .sh-arrow {
-      position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-      font: 600 15px/1 var(--font-sans); color: var(--mut);
-      opacity: .5; transition: transform .18s ease, opacity .18s ease;
+      position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+      font: 600 17px/1 var(--font-sans); color: var(--mut);
+      opacity: .4; transition: transform .22s cubic-bezier(.2,.9,.3,1), opacity .18s ease;
     }
 
     /* ---- PATTERN GRID ---- */
