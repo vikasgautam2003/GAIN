@@ -136,6 +136,11 @@ function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
                 <span class="sb-text">Suggest another task</span>
                 <small class="sb-hint">Groq picks from your sheet</small>
               </button>
+              <button class="recap-btn" id="recap-btn" title="Reopen today's end-of-day recap — stats, honest reflection, tomorrow focus">
+                <span class="rb-ic">◷</span>
+                <span class="rb-text">Review today's recap</span>
+                <small class="rb-hint">Butler reflection anytime</small>
+              </button>
               <div class="more-wrap">
                 <button class="more-btn" id="more-btn" title="More actions" aria-haspopup="true" aria-expanded="false">⋯</button>
                 <div class="more-pop" id="more-pop" hidden role="menu">
@@ -1377,6 +1382,14 @@ function attachHandlers(root) {
   root.querySelector("#suggest-btn")?.addEventListener("click", (e) => {
     e.preventDefault();
     openSuggestModal(root);
+  });
+
+  // ◷ Review today's recap — reopens the end-of-day butler reflection anytime
+  root.querySelector("#recap-btn")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const { openRecapForDate } = await import("./recap.js");
+    const opened = openRecapForDate(todayKey());
+    if (!opened) flashRowToast(root, "Today has no plan yet.");
   });
 
   // ⋯ More dropdown — toggle open/close
@@ -2713,9 +2726,27 @@ function styles() {
 
     /* ---- Suggest a task button (below plan rows, above add row) ---- */
     .today .suggest-row {
-      display: flex; justify-content: center; align-items: center; gap: 8px;
+      display: flex; justify-content: center; align-items: center; gap: 10px;
       margin: 14px 0 10px;
       position: relative;
+      flex-wrap: wrap;
+    }
+
+    /* Review today's recap button — same shape as suggest-btn, gold accent instead of blue */
+    .today .recap-btn {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 12px 20px; border-radius: 12px;
+      background: var(--paper); border: 1px dashed color-mix(in oklab, var(--gold) 42%, var(--line));
+      color: var(--mut); cursor: pointer;
+      font: 600 13.5px/1 var(--font-sans); letter-spacing: -.005em;
+      transition: all .18s;
+    }
+    .today .recap-btn:hover { color: var(--ink); border-color: var(--gold); border-style: solid; background: color-mix(in oklab, var(--gold) 7%, var(--paper)); transform: translateY(-1px); }
+    .today .recap-btn .rb-ic { color: var(--gold); font-size: 16px; line-height: 1; }
+    .today .recap-btn .rb-text { font-weight: 700; color: var(--ink); }
+    .today .recap-btn .rb-hint { color: var(--mut); font-size: 11px; font-weight: 500; letter-spacing: .01em; }
+    @media (max-width: 720px) {
+      .today .recap-btn .rb-hint { display: none; }
     }
     .today .more-wrap { position: relative; display: inline-block; }
     .today .more-btn {
