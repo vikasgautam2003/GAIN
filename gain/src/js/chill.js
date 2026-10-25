@@ -451,6 +451,11 @@ function injectStyles() {
     /* Edge-to-edge: when active, strip the view container's padding */
     #view.hideout-active { padding: 0 !important; max-width: none !important; margin: 0 !important; }
 
+    /* The display: flex / grid rules below override [hidden] in the UA
+       stylesheet, so explicitly re-enforce it. Fixes: modal stays open on
+       mount; empty state + section rows don't actually hide. */
+    .hideout [hidden], .hd-scrim[hidden], .hd-row[hidden], .hd-empty[hidden] { display: none !important; }
+
     .hideout {
       position: relative;
       min-height: calc(100vh - 56px);
