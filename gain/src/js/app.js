@@ -473,7 +473,7 @@ async function renderStreakPop(pop) {
         <div class="sp-stat-sub">Longest: <b>${longest}</b> days</div>
       </div>
       <div class="sp-tokens">
-        <div class="sp-tok-ic">🧊</div>
+        <img class="sp-tok-ic sp-tok-shard" src="https://static.vecteezy.com/system/resources/previews/081/464/122/non_2x/cartoon-ice-explosion-effect-with-frozen-shards-isolated-on-transparent-background-free-png.png" alt="Streak freeze shard" />
         <div class="sp-tok-count">${tokens}</div>
         <div class="sp-tok-lb">freeze token${tokens === 1 ? "" : "s"}</div>
       </div>

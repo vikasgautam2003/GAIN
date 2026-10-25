@@ -153,6 +153,20 @@ function render({ dateStr, honest, q1, q2, total, dsa, sd, int, s }) {
                       <small>Groq extracts title + pattern + difficulty</small>
                     </span>
                   </button>
+                  <button class="more-item" data-more="yrecap" role="menuitem">
+                    <span class="mi-ic">◷</span>
+                    <span class="mi-main">
+                      <b>View yesterday's recap</b>
+                      <small>Butler reflection + tomorrow focus from the day before</small>
+                    </span>
+                  </button>
+                  <button class="more-item" data-more="todayrecap" role="menuitem">
+                    <span class="mi-ic">✦</span>
+                    <span class="mi-main">
+                      <b>Review today's recap</b>
+                      <small>Even if the end-of-day modal already fired, reopen it</small>
+                    </span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -1391,6 +1405,16 @@ function attachHandlers(root) {
         const kind = btn.dataset.more;
         if (kind === "redo") await addExtraRedo(root);
         else if (kind === "lcpaste") await openLeetCodePaste(root);
+        else if (kind === "yrecap") {
+          const { openYesterdayRecap } = await import("./recap.js");
+          const opened = openYesterdayRecap();
+          if (!opened) flashRowToast(root, "Nothing to recap — yesterday had no plan.");
+        }
+        else if (kind === "todayrecap") {
+          const { openRecapForDate } = await import("./recap.js");
+          const opened = openRecapForDate(todayKey());
+          if (!opened) flashRowToast(root, "Today has no plan yet.");
+        }
       });
     });
   }

@@ -32,6 +32,23 @@ export async function tryOpenRecap({ force = false, reason = "manual" } = {}) {
   return true;
 }
 
+// Open the recap for ANY past date on demand. Returns true if opened, false if
+// that date has no plan to recap. Does NOT touch the "fired today" marker.
+export function openRecapForDate(dateKey) {
+  const day = getDayLog()[dateKey];
+  if (!day || !day.assigned?.length) return false;
+  openRecapModal({ dateKey, day, reason: "manual-view" });
+  return true;
+}
+
+// Convenience: open yesterday's recap (calendar-day step back from today).
+export function openYesterdayRecap() {
+  const t = todayKey();
+  const d = new Date(t + "T12:00:00");
+  d.setDate(d.getDate() - 1);
+  return openRecapForDate(calendarKey(d));
+}
+
 // Boot-time: check now + every 2 min for the 18:50 IST window.
 // If plan isn't complete by then but it's within window, still fire a
 // shorter "midday checkpoint" variant (no, let's keep it simple: only fire

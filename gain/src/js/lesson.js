@@ -485,7 +485,33 @@ function renderSectionHTML(sec, lesson, { stepIdx }) {
           </li>`).join("")}
         </ol>` : ""}
         ${d.imageQuery ? imageFigureHTML(d.imageQuery) : ""}
-        ${d.realWorldScenario ? `
+        ${d.realWorldCaseStudy ? `
+          <div class="lsn-casestudy">
+            <div class="lsn-casestudy-head">
+              <span class="lsn-casestudy-tag">★ Case study — where this earns its keep</span>
+              ${d.realWorldCaseStudy.company ? `<div class="lsn-casestudy-company">${esc(d.realWorldCaseStudy.company)}</div>` : ""}
+            </div>
+            ${d.realWorldCaseStudy.problemContext ? `
+              <div class="lsn-cs-block">
+                <div class="lsn-cs-label">The problem</div>
+                <p>${renderMarkdown(d.realWorldCaseStudy.problemContext)}</p>
+              </div>` : ""}
+            ${d.realWorldCaseStudy.solutionApproach ? `
+              <div class="lsn-cs-block">
+                <div class="lsn-cs-label">The approach</div>
+                <p>${renderMarkdown(d.realWorldCaseStudy.solutionApproach)}</p>
+              </div>` : ""}
+            ${d.realWorldCaseStudy.outcome ? `
+              <div class="lsn-cs-block">
+                <div class="lsn-cs-label">The outcome</div>
+                <p>${renderMarkdown(d.realWorldCaseStudy.outcome)}</p>
+              </div>` : ""}
+            ${d.realWorldCaseStudy.imageQueries?.length ? `
+              <div class="lsn-cs-gallery">
+                ${d.realWorldCaseStudy.imageQueries.map(q => imageFigureHTML(q)).join("")}
+              </div>` : ""}
+          </div>
+        ` : d.realWorldScenario ? `
           <div class="lsn-realworld">
             <div class="lsn-realworld-head">
               <span class="lsn-realworld-tag">★ Where this shows up in the wild</span>
@@ -496,7 +522,10 @@ function renderSectionHTML(sec, lesson, { stepIdx }) {
         ` : ""}
       </section>`,
       image: img(d.imageQuery),
-      extraImages: [d.realWorldImageQuery].filter(Boolean).map(q => ({ query: q, section: "dryRun-realworld" })),
+      extraImages: [
+        ...(d.realWorldCaseStudy?.imageQueries || []),
+        ...(d.realWorldImageQuery ? [d.realWorldImageQuery] : []),
+      ].filter(Boolean).map(q => ({ query: q, section: "dryRun-realworld" })),
     };
   }
   if (sec === "code" && lesson.code) {
@@ -565,13 +594,25 @@ function renderSectionHTML(sec, lesson, { stepIdx }) {
     };
   }
   if (sec === "interviewPointers" && lesson.interviewPointers?.length) {
+    // Each pointer may be { question, answer } (new) or just a bare string (old shape, normalized to {question: s, answer: ""})
+    const anyAnswers = lesson.interviewPointers.some(x => x.answer);
+    const items = lesson.interviewPointers.map((x, i) => {
+      if (x.answer) {
+        return `<details class="lsn-pointer-qa">
+          <summary><span class="lsn-pointer-num">Q${i + 1}</span><span class="lsn-pointer-q">${renderMarkdown(x.question)}</span><span class="lsn-pointer-chev">▾</span></summary>
+          <div class="lsn-pointer-a">${renderMarkdown(x.answer)}</div>
+        </details>`;
+      }
+      return `<li>${renderMarkdown(x.question)}</li>`;
+    });
+    const body = anyAnswers
+      ? `<div class="lsn-pointer-qas">${items.join("")}</div>`
+      : `<ol class="lsn-pointer-list">${items.join("")}</ol>`;
     return {
       html: `<section class="lsn-sec lsn-pointers" data-sec="interviewPointers">
         <h3>${step}<span>Interview pointers</span></h3>
-        <p class="lsn-setup">The angles an interviewer probes next. Rehearse these.</p>
-        <ol class="lsn-pointer-list">
-          ${lesson.interviewPointers.map(p => `<li>${renderMarkdown(p)}</li>`).join("")}
-        </ol>
+        <p class="lsn-setup">${anyAnswers ? "The questions interviewers actually ask after this problem — model answers below. Click any to reveal." : "The angles an interviewer probes next. Rehearse these."}</p>
+        ${body}
       </section>`,
       image: null,
     };
@@ -1033,6 +1074,15 @@ function normalizeLesson(p, plan) {
     dryRun: p.dryRun ? {
       example: normStr(p.dryRun.example),
       steps: arr(p.dryRun.steps).map(s => ({ call: normStr(s.call), returns: normStr(s.returns), note: normStr(s.note) })).filter(s => s.call || s.returns),
+      // New structured case study — prefer it if filled.
+      realWorldCaseStudy: p.dryRun.realWorldCaseStudy ? {
+        company: normStr(p.dryRun.realWorldCaseStudy.company),
+        problemContext: normStr(p.dryRun.realWorldCaseStudy.problemContext),
+        solutionApproach: normStr(p.dryRun.realWorldCaseStudy.solutionApproach),
+        outcome: normStr(p.dryRun.realWorldCaseStudy.outcome),
+        imageQueries: arr(p.dryRun.realWorldCaseStudy.imageQueries).map(normStr).filter(Boolean).slice(0, 3),
+      } : null,
+      // Legacy fallback — plain scenario string.
       realWorldScenario: normStr(p.dryRun.realWorldScenario),
       realWorldImageQuery: normStr(p.dryRun.realWorldImageQuery),
       imageQuery: normStr(p.dryRun.imageQuery),
@@ -1050,7 +1100,11 @@ function normalizeLesson(p, plan) {
       spaceWhy: normStr(p.complexity.spaceWhy),
     } : null,
     tradeoffs: arr(p.tradeoffs).map(t => ({ pro: normStr(t.pro), con: normStr(t.con) })).filter(t => t.pro || t.con),
-    interviewPointers: normStrList(p.interviewPointers).slice(0, 4),
+    // Interview pointers: accept BOTH new {question, answer} objects AND legacy string array.
+    interviewPointers: arr(p.interviewPointers).map(x => {
+      if (typeof x === "string") return { question: str(x), answer: "" };
+      return { question: str(x?.question), answer: str(x?.answer) };
+    }).filter(x => x.question).slice(0, 6),
     revisionNotes: normStrList(p.revisionNotes).slice(0, 4),
     youtubeQuery: normStr(p.youtubeQuery),
     quiz: arr(p.quiz).map(q => ({
@@ -1077,7 +1131,7 @@ function buildSystemPrompt(kind, plan, { rebuildMode = false } = {}) {
   schemaParts.push(`"problem": {"concept": "2-3 sentences explaining the UNDERLYING CONCEPT in plain human language, as if to someone who has never seen a LeetCode problem — e.g. for Two Sum: 'you have a list of numbers and want to find two that add up to a target; the question is how to do that without checking every pair'", "setup": "then the LeetCode-style framing in 1-2 sentences: what is given, what to return", "examples": [{"input": "exact input in code-like notation, e.g. nums=[2,7,11,15], target=9", "output": "exact return value in code-like notation, e.g. [0,1]", "explanation": "ONE sentence connecting the input to the output in plain words — the WHY, not just the WHAT"}], "imageQuery": "google image query for a problem diagram, or empty"}`);
   schemaParts.push(`"intuition": {"setup": "lead-in sentence", "trick": "the key insight in one sentence", "whyItWorks": "2-3 sentences explaining the invariant", "imageQuery": "google image query for an intuition visualization, or empty"}`);
   if (plan.includes("dryRun")) {
-    schemaParts.push(`"dryRun": {"example": "the specific input traced", "steps": [{"call": "pow(2,10)", "returns": "32*32 = 1024", "note": "optional 1-sentence explanation of what this step is doing"}], "realWorldScenario": "2-3 sentences describing a REAL-WORLD scenario where this same algorithm/technique appears in actual software (e.g. for monotonic stack: 'stock-price streaming analytics tracking next-higher-price per tick' or 'auto-complete rendering showing the next-relevant suggestion'). Must be a plausible, specific product/engineering context — not a generic 'this is used in many places' hand-wave.", "realWorldImageQuery": "google image query for a diagram/screenshot of that real-world scenario (e.g. stock chart next-greater element, order-book visualization)", "imageQuery": "call-stack or trace visualization query, or empty"}`);
+    schemaParts.push(`"dryRun": {"example": "the specific input traced", "steps": [{"call": "pow(2,10)", "returns": "32*32 = 1024", "note": "optional 1-sentence explanation of what state looks like after this step"}], "realWorldCaseStudy": {"company": "a specific real company or product (e.g. 'Robinhood real-time price feed', 'Instagram story ring', 'Postgres index scan')", "problemContext": "3-4 sentences describing the SPECIFIC engineering problem that company faces where this exact algorithm/pattern earns its keep. Name the scale (requests/sec, data volume), the constraint (latency budget, memory ceiling), and WHO suffers if it goes wrong (user, downstream service).", "solutionApproach": "3-4 sentences on HOW the pattern maps to that production code. Reference the data structure, the invariant, the complexity win. Make it feel like you've worked on it.", "outcome": "2 sentences on the measurable win (p99 latency dropped from X to Y, memory went from O(n) to O(log n), the engineer avoided writing a cron job).", "imageQueries": ["2-3 google image search queries that would return teaching diagrams, product screenshots, or architecture visualizations relevant to this case study"]}, "realWorldScenario": "fallback plain-text 2-3 sentence version IF the structured caseStudy above is not populated — keep empty if caseStudy is filled", "realWorldImageQuery": "fallback single image query — keep empty if caseStudy.imageQueries is filled", "imageQuery": "call-stack or trace visualization query, or empty"}`);
   }
   if (plan.includes("code")) {
     schemaParts.push(`"code": {"language": "${codeLang}", "source": "FULL ${codeLang.toUpperCase()} solution with correct indentation and newlines", "lineExplanations": [{"line": "a key line from source", "why": "what it does and why it must be there"}]}`);
@@ -1089,7 +1143,7 @@ function buildSystemPrompt(kind, plan, { rebuildMode = false } = {}) {
   if (plan.includes("tradeoffs")) {
     schemaParts.push(`"tradeoffs": [{"pro": "advantage", "con": "cost"}, ...]`);
   }
-  schemaParts.push(`"interviewPointers": ["3 bullets each naming a specific follow-up angle an interviewer probes"]`);
+  schemaParts.push(`"interviewPointers": [{"question": "exact follow-up an interviewer actually asks after this problem", "answer": "3-5 sentence complete model answer — specific, technical, confident, references the right data structure / complexity / edge case"}]`);
   schemaParts.push(`"revisionNotes": ["3 short flashcard-sized points to remember"]`);
   schemaParts.push(`"youtubeQuery": "4-8 word YouTube search for a top-tier explainer"`);
   schemaParts.push(`"quiz": [
@@ -1151,8 +1205,8 @@ TEACHING CRAFT (apply across every text field — this is what separates a good 
    Every example uses real numbers the student can trace. Never "arr[i]" when you can write "arr[2] = 7".
    Edge cases must name the specific input shape, not "when input is empty" — write "when nums = []".
 
-7. ONE IDEA PER SENTENCE.
-   Short sentences. Max 20 words. If a sentence has two "and"s or a comma + "which", split it.
+7. ONE IDEA PER SENTENCE, BUT GO DEEP WHERE IT HELPS.
+   Short sentences by default — max 20 words. BUT: the setup paragraphs of problem/intuition/whyItWorks SHOULD run 3–6 sentences when the concept has real depth. Don't be artificially terse. A 1-sentence intuition on a hard topic is lazy; a 5-sentence intuition that actually unpacks the mechanism is teaching. Bullets and quiz options stay tight. Prose explanations earn length when they use it to drill the concept.
 
 8. TEACH BY CONTRAST.
    At least once in intuition OR edgeCases, use "the naive X does Y, so we do Z instead". Contrast makes mechanisms memorable.
@@ -1167,7 +1221,7 @@ TEACHING CRAFT (apply across every text field — this is what separates a good 
 STRUCTURAL RULES:
 - Return the EXACT keys above. Do not add or drop keys.
 - Images: for every imageQuery, pick a search phrase that returns a TEACHING DIAGRAM (not stock photo, not a person). Return empty string if no diagram helps.
-- Code: ${isProgrammatic ? `FULL compilable ${codeLang.toUpperCase()} code block. Correct indentation. Standard idiom (${codeLang === "java" ? "public class Solution with a method named per LeetCode convention" : "a single query"}).` : "no code field needed"}
+- Code: ${isProgrammatic ? `FULL compilable ${codeLang.toUpperCase()} code block in LeetCode submission style. ${codeLang === "java" ? "Write `class Solution { ... }` with the method signature exactly as LeetCode gives it. Assume all standard imports (java.util.*, java.util.stream.*) are already available — don't write import statements." : "Write a single well-formatted query."} Correct indentation.` : "no code field needed"}
 - Quiz difficulty — a serious student who read the lesson or watched the video gets ≥3/5. A skimmer risks failing.
   * Q1 recall: direct from problem/example. Easy IF read.
   * Q2 concept: tests the "trick" — paraphrased, not quoted.
@@ -1176,7 +1230,8 @@ STRUCTURAL RULES:
   * Q5 interview pointer: ties to interviewPointers section.
 - Distractors: all 4 options MUST be plausible — no "banana" throwaways. Wrong options should encode real misconceptions a half-prepared student holds. NO "all/none of the above". NO yes/no. Exactly one correct answer.
 - Keep oneLineGist to ONE short sentence.
-- Keep interviewPointers and revisionNotes to EXACTLY 3 items each.
+- Keep revisionNotes to EXACTLY 3 items.
+- Keep interviewPointers to EXACTLY 5 items (question + answer objects). Each question must be a real interviewer follow-up to this specific problem — not generic. Each answer must be a complete, confident model response the student can rehearse.
 - Examples: give 2 to 3 worked examples in the problem.examples array, LeetCode-style (input, output, explanation). The first example should be the simplest case; the last should probe an edge or a subtle variation.
 
 Reply as JSON.`;
@@ -1353,7 +1408,8 @@ function renderVideo(slot, { candidates, youtubeQuery, currentIdx = 0 }) {
       </div>
       <div class="lsn-vid-controls static">
         <span class="lsn-vid-counter">${currentIdx + 1} of ${total}</span>
-        ${total > 1 ? `<button class="lsn-vid-ctrl" data-next-vid>↷ Try next pick</button>` : ""}
+        ${total > 1 ? `<button class="lsn-vid-ctrl" data-prev-vid aria-label="Previous video pick">← Prev</button>` : ""}
+        ${total > 1 ? `<button class="lsn-vid-ctrl" data-next-vid aria-label="Next video pick">Next →</button>` : ""}
         <a class="lsn-vid-ctrl lsn-vid-ext" href="${videoUrl}" data-ext>▶ Watch on YouTube ↗</a>
       </div>
     </div>
@@ -1361,6 +1417,10 @@ function renderVideo(slot, { candidates, youtubeQuery, currentIdx = 0 }) {
   slot.querySelector("[data-next-vid]")?.addEventListener("click", () => {
     const nextIdx = (currentIdx + 1) % total;
     renderVideo(slot, { candidates, youtubeQuery, currentIdx: nextIdx });
+  });
+  slot.querySelector("[data-prev-vid]")?.addEventListener("click", () => {
+    const prevIdx = (currentIdx - 1 + total) % total;
+    renderVideo(slot, { candidates, youtubeQuery, currentIdx: prevIdx });
   });
 }
 
@@ -2178,6 +2238,60 @@ function injectStyles() {
     .lsn-realworld-tag { font: 700 11px/1 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--blue, #3870ff); }
     .lsn-realworld p { margin: 0 0 10px; font: 500 14px/1.6 var(--font-sans); color: var(--ink); }
     .lsn-realworld .lsn-img { margin: 10px 0 0; }
+
+    /* Case study — richer successor to realWorldScenario */
+    .lsn-casestudy {
+      margin-top: 24px; padding: 22px 24px;
+      background: color-mix(in oklab, var(--blue, #3870ff) 5%, var(--paper));
+      border: 1px solid color-mix(in oklab, var(--blue, #3870ff) 22%, var(--line));
+      border-radius: 14px;
+    }
+    .lsn-casestudy-head { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
+    .lsn-casestudy-tag { font: 700 11.5px/1 var(--font-sans); letter-spacing: .12em; text-transform: uppercase; color: var(--blue, #3870ff); }
+    .lsn-casestudy-company { font: 700 17px/1.3 var(--font-sans); color: var(--ink); letter-spacing: -.01em; }
+    .lsn-cs-block { margin-top: 14px; }
+    .lsn-cs-label { font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); margin-bottom: 6px; }
+    .lsn-cs-block p { margin: 0; font: 500 14.5px/1.7 var(--font-sans); color: var(--ink); }
+    .lsn-cs-gallery {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px; margin-top: 16px;
+    }
+    .lsn-cs-gallery .lsn-img { margin: 0; }
+    @media (max-width: 560px) { .lsn-cs-gallery { grid-template-columns: 1fr; } }
+
+    /* Interview-pointer Q&A collapsibles */
+    .lsn-pointer-qas { display: flex; flex-direction: column; gap: 10px; }
+    .lsn-pointer-qa {
+      padding: 0; background: var(--paper); border: 1px solid var(--line);
+      border-radius: 10px; overflow: hidden;
+      transition: border-color .18s;
+    }
+    .lsn-pointer-qa:hover { border-color: var(--line2); }
+    .lsn-pointer-qa[open] { border-color: color-mix(in oklab, var(--blue, #3870ff) 32%, var(--line)); }
+    .lsn-pointer-qa summary {
+      padding: 14px 18px; cursor: pointer; list-style: none;
+      display: flex; align-items: center; gap: 12px;
+      font: 600 14px/1.4 var(--font-sans); color: var(--ink);
+    }
+    .lsn-pointer-qa summary::-webkit-details-marker { display: none; }
+    .lsn-pointer-num {
+      flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+      min-width: 32px; height: 24px; padding: 0 7px; border-radius: 6px;
+      background: var(--ink); color: var(--paper);
+      font: 700 11px/1 var(--font-sans); letter-spacing: .04em;
+    }
+    .lsn-pointer-q { flex: 1; min-width: 0; }
+    .lsn-pointer-chev { color: var(--mut); font-size: 14px; transition: transform .18s; }
+    .lsn-pointer-qa[open] .lsn-pointer-chev { transform: rotate(180deg); }
+    .lsn-pointer-a {
+      padding: 4px 18px 18px 62px;
+      font: 500 13.5px/1.75 var(--font-sans); color: var(--ink);
+      border-top: 1px dashed var(--line);
+      margin-top: 2px; padding-top: 14px;
+    }
+    @media (max-width: 560px) {
+      .lsn-pointer-a { padding-left: 18px; }
+    }
 
     .lsn-example {
       display: flex; align-items: center; gap: 10px;
