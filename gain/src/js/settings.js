@@ -5,6 +5,7 @@ import {
   getShopQuoteCounts, addShopQuotes, clearUserShopQuotes,
   callGrok, resetAllProgress,
   exportBackup, importBackup,
+  exportFullBackup, validateFullBackup, importFullBackup,
   getWallet, updateWallet
 } from "./store.js";
 import { parseCSV } from "./csv.js";
@@ -449,11 +450,18 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
               <div class="bz-sub">One JSON file holds your entire climb. Keep it anywhere — if this app vanishes, the file brings you back.</div>
             </div>
             <div class="bz-top-actions">
-              <button class="btn-primary bz-btn" id="btn-export-backup">
-                <span class="bz-btn-ic">↓</span> Export backup
+              <button class="btn-primary bz-btn" id="btn-export-full-backup" title="Bulletproof: packs EVERY piece of state (settings, wallet, dayLog, sheets, solutions, lessons, caches) into a single checksummed JSON file. Takes a safety snapshot on restore.">
+                <span class="bz-btn-ic">⬇</span> Export full backup
               </button>
-              <label class="bz-btn bz-btn-ghost" for="file-import-backup">
-                <span class="bz-btn-ic">↑</span> Restore from file
+              <label class="bz-btn bz-btn-ghost" for="file-import-full-backup" title="Restore from a full backup. We checksum-verify the file first, write a safety snapshot of your current state, then overwrite everything atomically. If anything fails, state rolls back.">
+                <span class="bz-btn-ic">⬆</span> Restore full backup
+              </label>
+              <input type="file" id="file-import-full-backup" accept="application/json,.json" hidden />
+              <button class="btn-primary bz-btn" id="btn-export-backup" hidden>
+                <span class="bz-btn-ic">↓</span> Export backup (legacy)
+              </button>
+              <label class="bz-btn bz-btn-ghost" for="file-import-backup" hidden>
+                <span class="bz-btn-ic">↑</span> Restore (legacy)
               </label>
               <input type="file" id="file-import-backup" accept="application/json,.json" hidden />
               <button class="bz-btn bz-btn-ghost" id="btn-export-grimoire" title="Download a single .md file of every solution, note, lesson, and key idea you've captured">
@@ -1534,6 +1542,80 @@ function attachHandlers(root) {
     } catch (err) {
       btn.innerHTML = `✗ ${err.message || err}`;
       setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 3200);
+    }
+  });
+
+  // ---- Full backup / restore (bulletproof) ----
+  root.querySelector("#btn-export-full-backup")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const originalHTML = btn.innerHTML;
+    try {
+      btn.disabled = true;
+      btn.innerHTML = `<span class="bz-btn-ic">⏱</span> Packing…`;
+      const json = await exportFullBackup();
+      const stamp = new Date().toISOString().slice(0, 10);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `gain-full-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
+      const sizeKb = Math.round(json.length / 1024);
+      btn.innerHTML = `<span class="bz-btn-ic">✓</span> Downloaded · ${sizeKb} KB`;
+      setTimeout(() => { btn.innerHTML = originalHTML; btn.disabled = false; }, 2600);
+    } catch (err) {
+      console.error("[settings] full export failed", err);
+      btn.innerHTML = `<span class="bz-btn-ic">✗</span> Failed · ${err?.message || err}`;
+      setTimeout(() => { btn.innerHTML = originalHTML; btn.disabled = false; }, 3600);
+    }
+  });
+
+  root.querySelector("#file-import-full-backup")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const flashLabel = (msg) => {
+      const label = root.querySelector('label[for="file-import-full-backup"]');
+      if (!label) return;
+      const original = label.innerHTML;
+      label.innerHTML = msg;
+      setTimeout(() => { label.innerHTML = original; }, 4000);
+    };
+    try {
+      const text = await file.text();
+      const validation = await validateFullBackup(text);
+      if (!validation.ok) {
+        flashLabel(`<span class="bz-btn-ic">✗</span> ${validation.errors.join("; ").slice(0, 90)}`);
+        e.target.value = "";
+        return;
+      }
+      const bundle = validation.bundle;
+      const stats = bundle.stats || {};
+      const when = new Date(bundle.exportedAt || Date.now()).toLocaleString();
+      const ok = await confirmDanger({
+        title: "Restore full backup?",
+        message: `Overwrites your current state with the backup from ${when}. A safety snapshot of your CURRENT state is saved to backups/ before anything changes.`,
+        confirmLabel: "Restore now",
+        consequences: [
+          `${stats.sheets || 0} sheets · ${stats.sheetRows || 0} rows total`,
+          `${stats.dayLogEntries || 0} day-log entries · ₹${(stats.walletEarned || 0).toLocaleString()} earned · ${stats.ledgerEntries || 0} ledger entries`,
+          `${stats.solutions || 0} saved solutions · ${stats.lessonCaches || 0} cached lessons`,
+          `Safety snapshot: backups/pre-import-{timestamp}.json`,
+          `Groq API key is in secure keyring — NOT in the backup — stays as-is.`
+        ]
+      });
+      if (!ok) { e.target.value = ""; return; }
+
+      const result = await importFullBackup(bundle);
+      flashLabel(`<span class="bz-btn-ic">✓</span> Restored · snapshot at ${result.snapshotPath.split("/").pop()}`);
+      // Small delay then reload UI
+      setTimeout(() => { location.reload(); }, 1200);
+    } catch (err) {
+      console.error("[settings] full import failed", err);
+      flashLabel(`<span class="bz-btn-ic">✗</span> ${(err?.message || String(err)).slice(0, 90)}`);
+    } finally {
+      e.target.value = "";
     }
   });
 

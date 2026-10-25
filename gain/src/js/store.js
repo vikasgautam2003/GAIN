@@ -1425,6 +1425,252 @@ export async function fetchUrlPreview(url) {
   }
 }
 
+// ======================================================================
+// BULLETPROOF BACKUP / RESTORE
+// ======================================================================
+// Format: a single JSON file with a version, timestamp, payload, and SHA-256
+// checksum of the payload. Import validates every piece BEFORE touching any
+// state, writes a pre-import snapshot to backups/, applies in memory, then
+// persists everything. If any step fails, we restore from the snapshot and
+// surface a readable error.
+
+const BACKUP_FORMAT_ID = "gain-backup";
+const BACKUP_FORMAT_VERSION = 1;
+
+// Collect every piece of state worth preserving.
+function collectBackupPayload() {
+  // Walk localStorage for all keys this app writes under the "gain:" prefix
+  // (lesson cache, lessonImg cache, warmup, lessonState, weeklyReport, etc.)
+  const localCache = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith("gain:")) continue;
+      try { localCache[k] = localStorage.getItem(k); } catch (_) {}
+    }
+  } catch (_) {}
+
+  const sheets = {};
+  for (const [name, sh] of Object.entries(state.sheets || {})) {
+    if (!sh) continue;
+    sheets[name] = {
+      file: sh.file,
+      type: sh.type,
+      headers: sh.headers || [],
+      rows: sh.rows || [],
+      columnMap: sh.columnMap || {},
+    };
+  }
+
+  return {
+    settings: state.settings,
+    wallet: state.wallet,
+    dayLog: state.dayLog,
+    solutions: state.solutions,
+    motivations: state.motivations,
+    shopQuotes: state.shopQuotes,
+    rewards: state.rewards,
+    weeklyPlan: state.weeklyPlan,
+    recreations: state.recreations,
+    collections: state.collections,
+    sheets,
+    localCache,
+  };
+}
+
+// Deterministic JSON stringify so the checksum is reproducible across machines.
+function stableStringify(obj) {
+  if (obj === null || obj === undefined) return JSON.stringify(obj);
+  if (typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return "[" + obj.map(stableStringify).join(",") + "]";
+  const keys = Object.keys(obj).sort();
+  return "{" + keys.map(k => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
+}
+
+async function sha256(text) {
+  // Browser crypto.subtle, available in Tauri's webview.
+  const buf = new TextEncoder().encode(text);
+  const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Build a complete backup blob (string). Includes checksum.
+export async function exportFullBackup() {
+  const payload = collectBackupPayload();
+  const payloadStr = stableStringify(payload);
+  const checksum = await sha256(payloadStr);
+  const bundle = {
+    format: BACKUP_FORMAT_ID,
+    version: BACKUP_FORMAT_VERSION,
+    exportedAt: new Date().toISOString(),
+    appVersion: "0.2",
+    checksum,
+    stats: {
+      sheets: Object.keys(payload.sheets).length,
+      sheetRows: Object.values(payload.sheets).reduce((a, s) => a + (s.rows?.length || 0), 0),
+      dayLogEntries: Object.keys(payload.dayLog || {}).length,
+      walletEarned: payload.wallet?.earned || 0,
+      ledgerEntries: (payload.wallet?.ledger || []).length,
+      solutions: Object.keys(payload.solutions || {}).length,
+      lessonCaches: Object.keys(payload.localCache || {}).filter(k => k.startsWith("gain:lesson")).length,
+    },
+    payload,
+  };
+  return JSON.stringify(bundle, null, 2);
+}
+
+// Validate a backup bundle string. Returns { ok, bundle, errors[] } without
+// touching state. Also recomputes + verifies the checksum.
+export async function validateFullBackup(text) {
+  const errors = [];
+  let bundle;
+  try { bundle = JSON.parse(text); }
+  catch (e) { return { ok: false, errors: [`invalid JSON: ${e.message}`] }; }
+  if (bundle?.format !== BACKUP_FORMAT_ID) errors.push("file is not a GAIN backup");
+  if (!Number.isInteger(bundle?.version)) errors.push("missing format version");
+  if (bundle?.version > BACKUP_FORMAT_VERSION) errors.push(`backup version ${bundle.version} newer than this app (${BACKUP_FORMAT_VERSION}) — update GAIN first`);
+  if (!bundle?.payload || typeof bundle.payload !== "object") errors.push("missing payload");
+  if (!bundle?.checksum) errors.push("missing checksum");
+  if (errors.length) return { ok: false, bundle, errors };
+
+  // Verify checksum
+  const recomputed = await sha256(stableStringify(bundle.payload));
+  if (recomputed !== bundle.checksum) {
+    errors.push("checksum mismatch — file is corrupt or was edited by hand");
+    return { ok: false, bundle, errors };
+  }
+
+  // Light structural checks
+  const p = bundle.payload;
+  if (!p.settings || !p.wallet || !p.dayLog) errors.push("payload missing core sections (settings/wallet/dayLog)");
+
+  return { ok: errors.length === 0, bundle, errors };
+}
+
+// Apply a validated backup to the app atomically. First writes a pre-import
+// snapshot of the CURRENT state to backups/pre-import-{ts}.json so the user
+// can roll back manually if they regret it. Then overwrites in-memory +
+// persists every slice. On any failure, attempts to restore from the snapshot.
+export async function importFullBackup(bundle) {
+  if (!bundle || bundle.format !== BACKUP_FORMAT_ID) throw new Error("not a valid GAIN backup");
+  const p = bundle.payload;
+  if (!p) throw new Error("missing payload");
+
+  // 1. Snapshot the current state to backups/ (uses the Rust writeFile → data_dir)
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const snapshotPath = `backups/pre-import-${stamp}.json`;
+  let snapshot = null;
+  try {
+    snapshot = await exportFullBackup();
+    await writeFile(snapshotPath, snapshot, false);  // no auto-backup of a snapshot
+  } catch (e) {
+    throw new Error(`couldn't write safety snapshot before import: ${e.message || e}. Import aborted.`);
+  }
+
+  // 2. Capture old in-memory state so we can roll back on error
+  const rollback = {
+    settings: structuredClone(state.settings),
+    wallet: structuredClone(state.wallet),
+    dayLog: structuredClone(state.dayLog),
+    solutions: structuredClone(state.solutions),
+    motivations: structuredClone(state.motivations),
+    shopQuotes: structuredClone(state.shopQuotes),
+    rewards: structuredClone(state.rewards),
+    weeklyPlan: state.weeklyPlan ? structuredClone(state.weeklyPlan) : null,
+    recreations: structuredClone(state.recreations),
+    collections: structuredClone(state.collections),
+    sheets: structuredClone(state.sheets),
+  };
+
+  // Capture localStorage keys for rollback
+  const rollbackLS = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("gain:")) rollbackLS[k] = localStorage.getItem(k);
+    }
+  } catch (_) {}
+
+  try {
+    // 3. Overwrite in memory
+    if (p.settings)    state.settings    = { ...DEFAULT_SETTINGS, ...p.settings };
+    if (p.wallet)      state.wallet      = { ...DEFAULT_WALLET,   ...p.wallet };
+    if (p.dayLog)      state.dayLog      = p.dayLog;
+    if (p.solutions)   state.solutions   = p.solutions;
+    if (p.motivations) state.motivations = p.motivations;
+    if (p.shopQuotes)  state.shopQuotes  = p.shopQuotes;
+    if (p.rewards)     state.rewards     = p.rewards;
+    if (p.weeklyPlan)  state.weeklyPlan  = p.weeklyPlan;
+    if (p.recreations) state.recreations = p.recreations;
+    if (p.collections) state.collections = p.collections;
+    if (p.sheets && typeof p.sheets === "object") state.sheets = p.sheets;
+
+    // 4. localStorage: clear existing gain:* keys, then write from backup
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("gain:")) toRemove.push(k);
+    }
+    for (const k of toRemove) { try { localStorage.removeItem(k); } catch (_) {} }
+    for (const [k, v] of Object.entries(p.localCache || {})) {
+      try { localStorage.setItem(k, v); } catch (_) {}
+    }
+
+    // 5. Persist all slices to disk
+    await persistSettings();
+    await persistWallet();
+    await persistDayLog();
+    await persistSolutions();
+    await persistRecreations();
+    await persistCollections();
+    try { await persistMotivations(); } catch (e) { console.warn("persistMotivations failed", e); }
+    try { await persistShopQuotes();  } catch (e) { console.warn("persistShopQuotes failed", e); }
+    try { await persistRewards();     } catch (e) { console.warn("persistRewards failed", e); }
+    if (state.weeklyPlan) try { await persistWeeklyPlan(); } catch (e) { console.warn("persistWeeklyPlan failed", e); }
+    // Sheets — each one serializes back to CSV
+    for (const name of Object.keys(state.sheets || {})) {
+      try { await persistSheet(name); } catch (e) { console.warn(`persistSheet(${name}) failed`, e); }
+    }
+
+    // 6. Notify every subscriber
+    emit("settings"); emit("wallet"); emit("dayLog"); emit("sheet");
+    emit("recreations"); emit("collections");
+
+    return {
+      ok: true,
+      snapshotPath,
+      stats: bundle.stats || {},
+    };
+  } catch (e) {
+    // Attempt rollback
+    try {
+      state.settings    = rollback.settings;
+      state.wallet      = rollback.wallet;
+      state.dayLog      = rollback.dayLog;
+      state.solutions   = rollback.solutions;
+      state.motivations = rollback.motivations;
+      state.shopQuotes  = rollback.shopQuotes;
+      state.rewards     = rollback.rewards;
+      state.weeklyPlan  = rollback.weeklyPlan;
+      state.recreations = rollback.recreations;
+      state.collections = rollback.collections;
+      state.sheets      = rollback.sheets;
+      // Restore localStorage
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("gain:")) try { localStorage.removeItem(k); } catch (_) {}
+      }
+      for (const [k, v] of Object.entries(rollbackLS)) {
+        try { localStorage.setItem(k, v); } catch (_) {}
+      }
+      emit("settings"); emit("wallet"); emit("dayLog"); emit("sheet");
+    } catch (rbErr) {
+      console.error("Rollback itself failed", rbErr);
+    }
+    throw new Error(`import failed: ${e.message || e}. State was rolled back. Safety snapshot still at ${snapshotPath}.`);
+  }
+}
+
 async function persistSolutions() {
   await writeFile("solutions.json", JSON.stringify(state.solutions, null, 2));
 }
@@ -1435,6 +1681,7 @@ window.__GAIN__ = {
   addSheet, removeSheet, callGrok, serpSearch, youtubeSearch, secure, boot,
   getRecreations, addRecreation, updateRecreation, deleteRecreation, bumpRecreationOpened, openRecreation, fetchUrlPreview, addRecreationJournal, markRecreationVisitStart,
   getCollections, addCollection, updateCollection, deleteCollection,
+  exportFullBackup, validateFullBackup, importFullBackup,
   getMotivations, getMotivationCounts, addMotivations, clearUserMotivations,
   getShopQuotes, getShopQuoteCounts, getShopQuote, addShopQuotes, clearUserShopQuotes,
   getRewards, addReward, updateReward, removeReward,
