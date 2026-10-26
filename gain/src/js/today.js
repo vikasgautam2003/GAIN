@@ -364,8 +364,11 @@ function paintPlan(root) {
         <span class="ip-spacer"></span>
       </div>
     ` : "";
+    // Done rows start collapsed — only the essentials are visible until the
+    // user clicks the chevron. Keeps the Today feed focused on pending work.
+    const collapsedCls = done ? "collapsed" : "";
     return `
-      <div class="task-row ${done ? "done" : ""} ${isInProgress ? "in-progress" : ""} ${needsRating ? "capture" : ""} ${isRevisit ? "revisit" : ""}" data-ref="${esc(t.ref)}">
+      <div class="task-row ${done ? "done" : ""} ${collapsedCls} ${isInProgress ? "in-progress" : ""} ${needsRating ? "capture" : ""} ${isRevisit ? "revisit" : ""}" data-ref="${esc(t.ref)}">
         <button class="checkbox ${done ? "done" : ""}" data-ref="${esc(t.ref)}" aria-label="Status for ${esc(t.title)}"></button>
         <div class="task-main">
           <div class="task-title-row">
@@ -426,6 +429,7 @@ function paintPlan(root) {
                   : "Rate it")
               : badgeFor(t)}
           </span>
+          ${done ? `<button class="task-expand" data-expand-ref="${esc(t.ref)}" aria-label="Expand details" title="Show details"><span class="task-expand-ic">▸</span></button>` : ""}
           <button class="task-del" data-del="${esc(t.ref)}" aria-label="Remove ${esc(t.title)}" title="Remove task">×</button>
         </div>
       </div>
@@ -711,6 +715,20 @@ function paintPlan(root) {
         sheetName: btn.dataset.learnSheet,
         rowIndex: Number(btn.dataset.learnRow),
       });
+    });
+  });
+
+  // Solved-row expand chevron → toggle the collapsed detail block
+  rowsEl.querySelectorAll(".task-expand").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const row = btn.closest(".task-row");
+      if (!row) return;
+      const next = !row.classList.contains("collapsed");  // was expanded? collapse
+      row.classList.toggle("collapsed", next);
+      const ic = btn.querySelector(".task-expand-ic");
+      if (ic) ic.textContent = next ? "▸" : "▾";
+      btn.setAttribute("title", next ? "Show details" : "Hide details");
     });
   });
 
@@ -2417,6 +2435,33 @@ function styles() {
     .today .task-title { font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.4; }
     .today .task-meta  { font-size: 12.5px; color: var(--mut); margin-top: 4px; }
     .today .task-row.done .task-title { color: var(--mut); text-decoration: line-through; }
+
+    /* --- Solved-row collapse ---
+       Done rows start compact: only checkbox, title, tiny logos, bounty, timer,
+       status badge, chevron, delete remain visible. Click the chevron to expand
+       the review strip + hover-chips + full meta. */
+    .today .task-row.done.collapsed .task-meta,
+    .today .task-row.done.collapsed .review-strip,
+    .today .task-row.done.collapsed .review-set,
+    .today .task-row.done.collapsed .hover-chips,
+    .today .task-row.done.collapsed .confidence-prompt,
+    .today .task-row.done.collapsed .in-progress-bar { display: none !important; }
+    /* Companies on collapsed-done rows: shrink to 16px + cap to 3 icons */
+    .today .task-row.done.collapsed .task-companies .co-ico { width: 16px !important; height: 16px !important; }
+    .today .task-row.done.collapsed .task-companies .co-ico:nth-child(n+4) { display: none; }
+    /* Expand chevron pill */
+    .today .task-expand {
+      width: 24px; height: 24px; margin-right: 2px;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 7px;
+      color: var(--mut); cursor: pointer;
+      font: 600 11px/1 var(--font-sans);
+      transition: all .14s ease;
+    }
+    .today .task-expand:hover { color: var(--ink); border-color: var(--line2); }
+    .today .task-expand-ic { line-height: 1; transition: transform .18s cubic-bezier(.2,.9,.3,1); }
+    .today .task-row.done:not(.collapsed) .task-expand { color: var(--ink); border-color: var(--line2); }
+    .today .task-row.done:not(.collapsed) .task-expand-ic { transform: rotate(0deg); }
     .today .task-right { display: flex; align-items: center; gap: var(--s-3); }
     .today .chev { color: var(--mut); font-size: 14px; }
     .today .task-del {

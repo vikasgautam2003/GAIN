@@ -43,7 +43,11 @@ const DEFAULT_SETTINGS = {
     // Despite the field name "grok", the backend now calls Groq (groq.com) — the AI butler.
     // Keeping the key name for backward compatibility with saved settings.
     apiKey: "",        // live key is kept in OS keyring via secure_set as "groq_api_key"; this mirrors last-set presence
-    model: "llama-3.3-70b-versatile",
+    // Default: openai/gpt-oss-20b — public tier (250K TPM / 1K RPM), 1000 t/s,
+    // 131K context, 65K completion. The llama 3.3 70b is Enterprise-only and
+    // was returning 429 on non-Enterprise accounts. User can still pick any
+    // other model in Settings → AI butler.
+    model: "openai/gpt-oss-20b",
     temperature: 0.3,
     masterPrompt:
 `You are GAIN's butler: a ruthless, caring personal FDE interview coach for Vikas,
@@ -255,6 +259,13 @@ export async function boot() {
     // (revisitCapPct, weeklyFocus, …) land for existing users without wiping
     // their persisted overrides.
     state.settings.schedule = { ...DEFAULT_SETTINGS.schedule, ...(state.settings.schedule || {}) };
+    // One-shot: if the user is still on the old Enterprise-only default model
+    // (llama-3.3-70b-versatile — returned 429 on non-Enterprise plans), bump
+    // them to the public-tier default. Any explicit non-default override
+    // (gpt-oss-120b, whisper, etc.) is left alone.
+    if (state.settings.grok && state.settings.grok.model === "llama-3.3-70b-versatile") {
+      state.settings.grok.model = "openai/gpt-oss-20b";
+    }
     if (state.settings.schedule.weeklyFocus == null) {
       state.settings.schedule.weeklyFocus = { ...DEFAULT_SETTINGS.schedule.weeklyFocus };
     } else {
