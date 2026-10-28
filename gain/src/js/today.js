@@ -295,8 +295,9 @@ function paintPlan(root) {
   // will respect the new mode immediately.
   import("./study.js").then(({ openStudyModeBar }) => {
     openStudyModeBar(root, () => paintPlan(root));
-    // Ensure the Add Tasks button lives right beside the mode bar once per paint
+    // Ensure the Add Tasks + Add Test buttons live right beside the mode bar
     mountAddTasksButton(root);
+    mountAddTestButton(root);
   }).catch(() => {});
 
   const rowsEl = root.querySelector("#plan-rows");
@@ -326,7 +327,10 @@ function paintPlan(root) {
     // Show review-strip right after rating is captured, until user picks an override.
     const showReviewStrip = done && rating != null && !reviewOverride && t.sheet && t.rowIndex != null && !isWarmup;
     const isBacklog = !!t.backlog;
-    const kindPill = isBacklog
+    const isWeeklyTest = !!t.weeklyTest || t.kind === "weekly-test";
+    const kindPill = isWeeklyTest
+      ? `<span class="k-pill k-weekly-test" title="Weekly test paper — tap to open. Big bounty if you nail it.">⚡ WEEKLY TEST</span>`
+      : isBacklog
       ? `<span class="k-pill k-backlog" title="Rolled over from a day you did 0 tasks">📋 BACKLOG</span>`
       : isWildcard
       ? `<span class="k-pill k-wildcard" title="Weakness-driven Wildcard — your weakest pattern's lowest-★ problem">🎲 WILDCARD</span>`
@@ -782,6 +786,14 @@ function paintPlan(root) {
       if (row.classList.contains("warmup")) {
         const startBtn = row.querySelector("[data-wu-start]");
         if (startBtn) startBtn.click();
+        return;
+      }
+      // Weekly test rows → jump to Tests page where the user picks params + starts.
+      const ref = row.dataset.ref;
+      const day = getDayLog()[currentKey()];
+      const t = day?.assigned?.find(x => x.ref === ref);
+      if (t?.weeklyTest || t?.kind === "weekly-test") {
+        location.hash = "#tests";
         return;
       }
       const btn = row.querySelector("button.checkbox");
@@ -1373,6 +1385,26 @@ function mountAddTasksButton(root) {
   injectAddTasksButtonStyles();
 }
 
+// Routes to the Tests page's New-test tab so the user can configure + launch
+// a test in-place. Doesn't open a popover — the Tests page already has the
+// full picker and we don't want to duplicate that UI here.
+function mountAddTestButton(root) {
+  const bar = document.getElementById("today-study-mode");
+  if (!bar) return;
+  if (bar.querySelector("#today-add-test-btn")) return;
+  const btn = document.createElement("button");
+  btn.id = "today-add-test-btn";
+  btn.className = "today-add-test-btn";
+  btn.type = "button";
+  btn.title = "Jump to the Tests page to pick a sheet, topics, length, and start a timed paper";
+  btn.innerHTML = `<span>🎯</span> Add test`;
+  bar.appendChild(btn);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    location.hash = "#tests";
+  });
+}
+
 function injectAddTasksButtonStyles() {
   if (document.getElementById("at-open-btn-styles")) return;
   const s = document.createElement("style");
@@ -1392,6 +1424,21 @@ function injectAddTasksButtonStyles() {
       transform: translateY(-1px);
       box-shadow: 0 6px 14px -4px color-mix(in oklab, var(--gold) 50%, transparent);
       border-color: color-mix(in oklab, var(--gold) 50%, var(--line));
+    }
+    .today-add-test-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 12px; margin-left: 6px;
+      border-radius: 10px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      color: var(--ink); font: 700 12.5px/1 var(--font-sans); letter-spacing: -.005em; cursor: pointer;
+      transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+    }
+    .today-add-test-btn > span:first-child { font-size: 15px; line-height: 1; margin-top: -1px; }
+    .today-add-test-btn:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in oklab, var(--ink) 30%, var(--line));
+      box-shadow: 0 4px 10px -3px rgba(0,0,0,.1);
     }
   `;
   document.head.appendChild(s);
@@ -3496,6 +3543,18 @@ function styles() {
       background: color-mix(in oklab, #8b4bff 14%, transparent);
       color: #8b4bff;
       border: 1px solid color-mix(in oklab, #8b4bff 32%, transparent);
+    }
+    /* ⚡ WEEKLY TEST — big gold accent so it reads as the main event */
+    .today .k-pill.k-weekly-test {
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 24%, var(--paper)), color-mix(in oklab, var(--gold) 12%, var(--paper)));
+      color: var(--ink);
+      border: 1px solid color-mix(in oklab, var(--gold) 48%, var(--line));
+      box-shadow: 0 2px 6px -2px color-mix(in oklab, var(--gold) 40%, transparent);
+      font-weight: 700;
+    }
+    .today .task-row:has(.k-pill.k-weekly-test):not(.done) {
+      border-left: 3px solid var(--gold);
+      box-shadow: 0 4px 12px -4px color-mix(in oklab, var(--gold) 25%, transparent);
     }
     /* 📋 BACKLOG — rolled over from a day the user did 0 tasks */
     .today .k-pill.k-backlog {

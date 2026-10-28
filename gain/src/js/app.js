@@ -16,6 +16,7 @@ import settings from "./settings.js";
 import mastery from "./mastery.js";
 import problem from "./problem.js";
 import behavioral from "./behavioral.js";
+import tests from "./tests.js";
 import "./study.js";   // Side-effect: registers window.__gainStudy for engine.js
 
 router.register("dashboard", dashboard);
@@ -29,6 +30,7 @@ router.register("settings", settings);
 router.register("mastery", mastery);
 router.register("problem", problem);
 router.register("behavioral", behavioral);
+router.register("tests", tests);
 
 async function main() {
   await boot();
@@ -98,6 +100,13 @@ async function main() {
   // Prune empty / >7-day-old weekly plan blobs on boot. Non-blocking.
   import("./engine.js").then(({ pruneStaleWeeklyPlans }) => {
     pruneStaleWeeklyPlans?.().catch(err => console.warn("[prune] weekly plans:", err));
+  });
+
+  // Weekly test scheduler — flip a coin for which weekend day the test lands.
+  // Idempotent per ISO week; non-blocking.
+  import("./testScheduler.js").then(({ maybeScheduleWeeklyTest, pruneStaleWeeklyTests }) => {
+    maybeScheduleWeeklyTest?.().catch(err => console.warn("[tests] schedule:", err));
+    pruneStaleWeeklyTests?.().catch(err => console.warn("[tests] prune:", err));
   });
 
   // Phase 8 — Monday weekly-plan nudge

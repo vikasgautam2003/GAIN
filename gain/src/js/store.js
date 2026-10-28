@@ -106,6 +106,15 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
       rotationIdx: 0,       // next-in-rotation index
       startedAt: null       // Monday timestamp of current focus week
     },
+    // --- TESTS ---
+    // Weekly scheduler flips a coin on Monday for which weekend day a test
+    // injects into Today. Fully disable-able. Bounty scales with your score:
+    // 100% nails it, 40% is the pass line, below 40% banks nothing.
+    tests: {
+      weeklyEnabled: true,
+      weeklyLengthMode: "standard",  // "quick" | "standard" | "deep"
+      bountyMultiplier: 1.0,         // user can boost/dial-down the bounty
+    },
     // --- STREAMLINED STUDY MODE ---
     // Per-sheet toggle: when true, Today + Suggest only picks problems from
     // the sheet's current "active" topic. The active topic is the first entry
@@ -307,6 +316,11 @@ export async function boot() {
     state.settings.schedule.dailyMix = {
       ...DEFAULT_SETTINGS.schedule.dailyMix,
       ...(state.settings.schedule.dailyMix || {}),
+    };
+    // Migration: tests settings
+    state.settings.schedule.tests = {
+      ...DEFAULT_SETTINGS.schedule.tests,
+      ...(state.settings.schedule.tests || {}),
     };
     // Migration: ensure the new `study` field (streamlined-mode state) is
     // present and deep-merged so defaults land but user edits persist.
