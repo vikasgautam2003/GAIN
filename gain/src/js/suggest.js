@@ -461,6 +461,25 @@ function buildCandidatePool(sheet, difficulty, context, sheetName) {
     });
   }
 
+  // STREAMLINED FILTER: if the sheet is in streamlined mode, keep only rows
+  // whose pattern matches the sheet's current active topic. Sheets in random
+  // mode (or without a Pattern column) pass through untouched.
+  try {
+    if (typeof window !== "undefined" && window.__gainStudy?.getActiveTopic) {
+      const active = window.__gainStudy.getActiveTopic(sheetName);
+      if (active) {
+        const filtered = rows.filter(r => String(r.pattern || "").trim() === active);
+        // If the filter would starve the pool, don't apply it — nothing worse
+        // than a Suggest modal that says "no problems" when there are
+        // actually plenty in other topics. Streamlined is a soft rail here.
+        if (filtered.length > 0) {
+          rows.length = 0;
+          rows.push(...filtered);
+        }
+      }
+    }
+  } catch (_) {}
+
   // Rank: pattern-of-the-week (if set) > weakest-pattern > weekly-theme > HIGH-freq
   const theme = context.theme ? context.theme.toLowerCase() : "";
   const weakest = context.weakest ? context.weakest.toLowerCase() : "";

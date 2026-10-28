@@ -93,6 +93,38 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
       current: "",          // explicit override — if empty, derive from rotationIdx
       rotationIdx: 0,       // next-in-rotation index
       startedAt: null       // Monday timestamp of current focus week
+    },
+    // --- STREAMLINED STUDY MODE ---
+    // Per-sheet toggle: when true, Today + Suggest only picks problems from
+    // the sheet's current "active" topic. The active topic is the first entry
+    // in `topicOrder[sheetName]` whose unlock criteria haven't been met:
+    //   > 10 problems solved in the topic AND avg ★ of the last 10 ≥ 4
+    //   > (sheets with < 10 problems in a topic: solve all of them + avg ≥ 4)
+    // Sheets left in RANDOM mode behave exactly like before — zero regressions.
+    // Sheets WITHOUT a Pattern column (e.g. Interview Extras today) silently
+    // fall back to random mode, with a banner surfacing the fallback once.
+    study: {
+      streamlined: {},        // { "DSA": true, "System Design": false, ... }
+      topicOrder: {},         // { "DSA": ["Arrays & Hashing", ...], ... }
+      // Default seed orders. User can reorder/add/delete via the editor.
+      // Derived from the NeetCode-ish standard sequence + sensible groupings
+      // for the concept-track sheets. These seed on first launch only; later
+      // the user's edits win.
+      defaultOrder: {
+        "DSA": [
+          "Arrays & Hashing", "Two Pointers", "Sliding Window", "Stack",
+          "Binary Search", "Linked List", "Trees", "Tries",
+          "Heap / Priority Queue", "Backtracking", "Graphs",
+          "Advanced Graphs", "1-D DP", "2-D DP", "Greedy", "Intervals",
+          "Math & Geometry", "Bit Manipulation"
+        ],
+        "System Design": [
+          "Fundamentals", "Databases", "Caching", "Load Balancing",
+          "Protocols", "Patterns", "SaaS Systems", "Case Study",
+          "Design / LLD", "Messaging"
+        ],
+        "OS & Networking": [ "OS", "Networking" ]
+      }
     }
   },
   wallet: {
@@ -259,6 +291,19 @@ export async function boot() {
     // (revisitCapPct, weeklyFocus, …) land for existing users without wiping
     // their persisted overrides.
     state.settings.schedule = { ...DEFAULT_SETTINGS.schedule, ...(state.settings.schedule || {}) };
+    // Migration: ensure the new `study` field (streamlined-mode state) is
+    // present and deep-merged so defaults land but user edits persist.
+    const existingStudy = state.settings.schedule.study || {};
+    state.settings.schedule.study = {
+      ...DEFAULT_SETTINGS.schedule.study,
+      ...existingStudy,
+      streamlined: { ...(existingStudy.streamlined || {}) },
+      topicOrder: { ...(existingStudy.topicOrder || {}) },
+      defaultOrder: {
+        ...DEFAULT_SETTINGS.schedule.study.defaultOrder,
+        ...(existingStudy.defaultOrder || {}),
+      },
+    };
     // One-shot: if the user is still on the old Enterprise-only default model
     // (llama-3.3-70b-versatile — returned 429 on non-Enterprise plans), bump
     // them to the public-tier default. Any explicit non-default override

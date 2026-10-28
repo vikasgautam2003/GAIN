@@ -16,6 +16,7 @@ import settings from "./settings.js";
 import mastery from "./mastery.js";
 import problem from "./problem.js";
 import behavioral from "./behavioral.js";
+import "./study.js";   // Side-effect: registers window.__gainStudy for engine.js
 
 router.register("dashboard", dashboard);
 router.register("today", today);

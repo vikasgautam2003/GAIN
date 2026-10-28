@@ -288,6 +288,15 @@ function paintPlan(root) {
     return;
   }
 
+  // Streamlined / Random study-mode bar — paints into #today-study-mode
+  // (created lazily by the module). Safe to call every re-paint. Changing
+  // mode doesn't rip today's assignments (those were already banked under
+  // the previous mode); new picks (next revisits, tomorrow's plan, Suggest)
+  // will respect the new mode immediately.
+  import("./study.js").then(({ openStudyModeBar }) => {
+    openStudyModeBar(root, () => paintPlan(root));
+  }).catch(() => {});
+
   const rowsEl = root.querySelector("#plan-rows");
   const subEl = root.querySelector("#plan-sub");
   const cntEl = root.querySelector("#plan-count");

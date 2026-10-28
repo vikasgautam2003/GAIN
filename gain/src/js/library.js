@@ -86,6 +86,7 @@ function render() {
           </button>
         `).join("")}
         <div class="lib-tab-spacer"></div>
+        <button class="btn-ghost" id="lib-order" title="Drag-reorder the topic priority for streamlined study mode">↕ Topic order</button>
         <button class="btn-ghost" id="lib-remove" title="Remove current sheet">Remove</button>
         <button class="btn-primary" id="lib-add" title="Add anything — row, bulk append, replace, or a new sheet">+ Add</button>
       </div>
@@ -920,6 +921,15 @@ function attach(root) {
 
   // Unified "+ Add" hub — one button, modal routes to the specific flow
   root.querySelector("#lib-add")?.addEventListener("click", () => openAddHubModal(root));
+
+  // Topic order editor — only meaningful if the current sheet has patterns.
+  root.querySelector("#lib-order")?.addEventListener("click", async () => {
+    if (!active) return;
+    const { openOrderEditor } = await import("./study.js");
+    openOrderEditor(active, () => {
+      // No library re-render needed — order lives in settings, not the sheet.
+    });
+  });
 
   // remove sheet
   root.querySelector("#lib-remove")?.addEventListener("click", async () => {

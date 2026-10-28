@@ -637,9 +637,20 @@ function estimateMinutes(difficulty = "") {
 }
 
 function pickNextDsa(dsa, n) {
+  // Streamlined mode: if DSA has an active topic, filter to only rows in it.
+  // study.js exposes a sync accessor on window.__gainStudy during its first
+  // import (see openStudyModeBar below). Safe fallback if not yet available.
+  let activeTopic = null;
+  try {
+    if (typeof window !== "undefined" && window.__gainStudy?.getActiveTopic) {
+      activeTopic = window.__gainStudy.getActiveTopic("DSA");
+    }
+  } catch (_) {}
+
   const todo = dsa.rows
     .map((r, i) => ({ ...r, _idx: i }))
     .filter(r => /^(todo|again)$/i.test(r.Status || "TODO"))
+    .filter(r => !activeTopic || String(r.Pattern || "").trim() === activeTopic)
     .sort((a, b) => {
       // HIGH first, then by Seq
       const rank = f => (f === "HIGH" ? 0 : f === "MED" ? 1 : 2);
