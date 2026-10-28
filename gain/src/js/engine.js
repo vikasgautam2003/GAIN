@@ -183,8 +183,87 @@ export async function ensureDailyPlan(dateKey = todayKey()) {
       dayEarned: 0
     };
   });
+  // Carry over YESTERDAY's assignments if the user did 0 tasks on it.
+  // Prepends to today's plan so backlog work is the first thing visible.
+  await carryOverZeroProgress(dateKey);
   await maybeInjectWildcard(dateKey);
   return getDayLog()[dateKey];
+}
+
+// If the day BEFORE `dateKey` ended with every assigned task uncompleted
+// (user genuinely skipped the day), prepend those tasks to today's plan
+// with t.backlog = true so they render with a BACKLOG pill. Called from
+// ensureDailyPlan right after a fresh plan is built.
+//
+// Guardrails:
+//   - Only looks at the IMMEDIATELY preceding day (max 1-day gap). We don't
+//     carry over a 5-day-old plan — that's just stale noise.
+//   - Never duplicates a task that's already on today's plan (dedup by
+//     sheet#rowIndex#title).
+//   - Carry refs get a `-BL-<date>` suffix so done/values dicts stay unique.
+//   - Skips warmup/log kinds — they're regenerable.
+async function carryOverZeroProgress(dateKey) {
+  const dl = getDayLog();
+  const today = dl[dateKey];
+  if (!today) return;
+  // Only check the previous calendar day. Compute what it should be.
+  const todayDate = parseKey(dateKey);
+  if (!todayDate) return;
+  const prevDate = new Date(todayDate);
+  prevDate.setUTCDate(prevDate.getUTCDate() - 1);
+  const prevKey = `${prevDate.getUTCFullYear()}-${String(prevDate.getUTCMonth() + 1).padStart(2, "0")}-${String(prevDate.getUTCDate()).padStart(2, "0")}`;
+  const prev = dl[prevKey];
+  if (!prev || !Array.isArray(prev.assigned) || prev.assigned.length === 0) return;
+  const doneCount = Array.isArray(prev.done) ? prev.done.length : 0;
+  if (doneCount > 0) return;  // user did SOMETHING yesterday — no carryover
+  // Pick carriable tasks — skip warmups/log-only and anything that would duplicate today's picks.
+  const existingKey = new Set(today.assigned.map(t => `${t.sheet || ""}#${t.rowIndex ?? ""}#${t.title || ""}`));
+  const carried = [];
+  for (const t of prev.assigned) {
+    if (t.kind === "warmup" || t.kind === "log") continue;
+    const key = `${t.sheet || ""}#${t.rowIndex ?? ""}#${t.title || ""}`;
+    if (existingKey.has(key)) continue;
+    carried.push({
+      ...t,
+      ref: `${t.ref}-BL-${dateKey}`,   // new unique ref so done/values don't collide
+      backlog: true,
+      backlogFrom: prevKey,
+    });
+  }
+  if (!carried.length) return;
+  const s = getSettings();
+  for (const t of carried) t.value = priceTask(t, s);
+  await updateDayLog(dlog => {
+    const d = dlog[dateKey];
+    if (!d) return;
+    d.assigned = [...carried, ...d.assigned];
+    for (const t of carried) d.values[t.ref] = t.value;
+  });
+}
+
+// Scrub stale/empty weeklyPlan blobs on any dayLog date more than 7 days old.
+// Called from boot (see store.js). Mutates state via updateDayLog so persistence
+// catches it on the next write.
+export async function pruneStaleWeeklyPlans() {
+  const dl = getDayLog();
+  const now = Date.now();
+  const dates = Object.keys(dl);
+  if (!dates.length) return;
+  let changed = false;
+  await updateDayLog(dlog => {
+    for (const d of dates) {
+      const entry = dlog[d];
+      if (!entry || !entry.weeklyPlan) continue;
+      const dateMs = parseKey(d)?.getTime();
+      const ageDays = dateMs ? Math.floor((now - dateMs) / 86400000) : 999;
+      const isEmpty = !entry.weeklyPlan.tasks || entry.weeklyPlan.tasks.length === 0;
+      if (ageDays > 7 || isEmpty) {
+        delete entry.weeklyPlan;
+        changed = true;
+      }
+    }
+  });
+  return changed;
 }
 
 // Wildcard — pick the weakest-pattern lowest-★ problem and inject it into

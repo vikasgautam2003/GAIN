@@ -79,6 +79,18 @@ TONE for 'reason' fields: terse, direct, no fluff.`,
     srIntervals: [7, 30],
     maxTasksPerDay: 5,    // hard cap — no overloading, no ripping yourself off
     revisitCapPct: 40,    // SRS: max % of daily plan reserved for due revisits (0 disables; higher = more review-heavy)
+    // Per-sheet daily mix — how many problems the "+ Add tasks" button pulls
+    // from each sheet in one shot. Editable from Settings → Schedule AND via a
+    // compact ⚙ Mix chip on the Today page. Only recognised sheet names are
+    // used; the picker silently skips any sheet with a 0 or missing entry.
+    dailyMix: {
+      "DSA": 2,
+      "System Design": 1,
+      "SQL": 1,
+      "Integrations": 1,
+      "Interview Extras": 1,
+      "OS & Networking": 1
+    },
     weeklyFocus: {
       // Curated list of indispensable patterns the app rotates through week-by-week.
       // Fully user-editable from Settings. On Monday the engine picks the next entry
@@ -291,6 +303,11 @@ export async function boot() {
     // (revisitCapPct, weeklyFocus, …) land for existing users without wiping
     // their persisted overrides.
     state.settings.schedule = { ...DEFAULT_SETTINGS.schedule, ...(state.settings.schedule || {}) };
+    // Deep-merge dailyMix so new sheets land for existing users without wiping tuned values
+    state.settings.schedule.dailyMix = {
+      ...DEFAULT_SETTINGS.schedule.dailyMix,
+      ...(state.settings.schedule.dailyMix || {}),
+    };
     // Migration: ensure the new `study` field (streamlined-mode state) is
     // present and deep-merged so defaults land but user edits persist.
     const existingStudy = state.settings.schedule.study || {};

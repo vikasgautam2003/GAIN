@@ -95,6 +95,11 @@ async function main() {
   const { startRecapScheduler } = await import("./recap.js");
   startRecapScheduler();
 
+  // Prune empty / >7-day-old weekly plan blobs on boot. Non-blocking.
+  import("./engine.js").then(({ pruneStaleWeeklyPlans }) => {
+    pruneStaleWeeklyPlans?.().catch(err => console.warn("[prune] weekly plans:", err));
+  });
+
   // Phase 8 — Monday weekly-plan nudge
   nudgeWeeklyPlanIfMonday();
   enhanceAll(document);  // sets up a mutation observer, so dynamically rendered selects also get the custom look

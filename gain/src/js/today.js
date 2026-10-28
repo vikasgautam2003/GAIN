@@ -295,6 +295,8 @@ function paintPlan(root) {
   // will respect the new mode immediately.
   import("./study.js").then(({ openStudyModeBar }) => {
     openStudyModeBar(root, () => paintPlan(root));
+    // Ensure the Add Tasks button lives right beside the mode bar once per paint
+    mountAddTasksButton(root);
   }).catch(() => {});
 
   const rowsEl = root.querySelector("#plan-rows");
@@ -323,7 +325,10 @@ function paintPlan(root) {
     const reviewOverride = day.reviewOverride?.[t.ref];
     // Show review-strip right after rating is captured, until user picks an override.
     const showReviewStrip = done && rating != null && !reviewOverride && t.sheet && t.rowIndex != null && !isWarmup;
-    const kindPill = isWildcard
+    const isBacklog = !!t.backlog;
+    const kindPill = isBacklog
+      ? `<span class="k-pill k-backlog" title="Rolled over from a day you did 0 tasks">📋 BACKLOG</span>`
+      : isWildcard
       ? `<span class="k-pill k-wildcard" title="Weakness-driven Wildcard — your weakest pattern's lowest-★ problem">🎲 WILDCARD</span>`
       : isCarried
         ? `<span class="k-pill k-carried" title="Rolled over from yesterday because it was undone at 7 PM IST">⤼ CARRIED</span>`
@@ -1333,6 +1338,65 @@ function fireMicroConfetti(anchor) {
 // Options: Pending (not started) · In-progress (auto-starts timer) · Complete.
 // Prevents accidental completion from a stray click, and surfaces the
 // in-progress state so Learn + I'm Stuck can appear on the row.
+// Mounts a "+ Add tasks" button inside the #today-study-mode bar. The study
+// bar lives above the task rows and shows the per-sheet mode toggle; we tuck
+// Add tasks on its right so the two controls read as "configure what fills
+// Today" and "fill Today now" without needing a separate strip.
+function mountAddTasksButton(root) {
+  const bar = document.getElementById("today-study-mode");
+  if (!bar) return;
+  // Already mounted? skip
+  if (bar.querySelector("#at-open-btn")) return;
+  // Build the button + wrap the bar's child so we can place it on the right
+  const btn = document.createElement("button");
+  btn.id = "at-open-btn";
+  btn.className = "at-open-btn";
+  btn.type = "button";
+  btn.title = "Add N tasks per sheet to today (Priority or Random)";
+  btn.innerHTML = `<span>+</span> Add tasks`;
+  bar.appendChild(btn);
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const { openAddTasksPopover } = await import("./addTasks.js");
+    openAddTasksPopover(btn, (summary) => {
+      // Flash a tiny toast about what landed
+      if (summary && summary.added > 0) {
+        const parts = Object.entries(summary.bySheet).map(([s, n]) => `${n} × ${s}`);
+        flashRowToast(root, `✦ Added ${summary.added} task${summary.added === 1 ? "" : "s"} · ${parts.join(" · ")} (${summary.mode})`);
+      } else {
+        flashRowToast(root, `No tasks added — mix may be zero, or every pick is already on today's plan.`);
+      }
+      paintPlan(root);
+    });
+  });
+  // Inject once-per-page styles for the button
+  injectAddTasksButtonStyles();
+}
+
+function injectAddTasksButtonStyles() {
+  if (document.getElementById("at-open-btn-styles")) return;
+  const s = document.createElement("style");
+  s.id = "at-open-btn-styles";
+  s.textContent = `
+    .at-open-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 12px; margin-left: 8px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--gold) 18%, var(--paper)) 0%, color-mix(in oklab, var(--gold) 6%, var(--paper)) 100%);
+      border: 1px solid color-mix(in oklab, var(--gold) 36%, var(--line));
+      color: var(--ink); font: 700 12.5px/1 var(--font-sans); letter-spacing: -.005em; cursor: pointer;
+      transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+    }
+    .at-open-btn > span:first-child { font-size: 15px; line-height: 1; margin-top: -1px; }
+    .at-open-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px -4px color-mix(in oklab, var(--gold) 50%, transparent);
+      border-color: color-mix(in oklab, var(--gold) 50%, var(--line));
+    }
+  `;
+  document.head.appendChild(s);
+}
+
 async function handleTick(btn, root) {
   const ref = btn.dataset.ref;
   const dateKey = currentKey();
@@ -3432,6 +3496,16 @@ function styles() {
       background: color-mix(in oklab, #8b4bff 14%, transparent);
       color: #8b4bff;
       border: 1px solid color-mix(in oklab, #8b4bff 32%, transparent);
+    }
+    /* 📋 BACKLOG — rolled over from a day the user did 0 tasks */
+    .today .k-pill.k-backlog {
+      background: color-mix(in oklab, var(--gold) 16%, transparent);
+      color: color-mix(in oklab, var(--gold) 85%, var(--ink));
+      border: 1px solid color-mix(in oklab, var(--gold) 36%, transparent);
+    }
+    /* Row-level accent so backlog tasks READ as backlog across the row */
+    .today .task-row:has(.k-pill.k-backlog):not(.done) {
+      border-left: 3px solid var(--gold);
     }
     .today .task-row.done .k-pill { opacity: .55; }
   </style>

@@ -162,6 +162,12 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
           </label>
         </div>
         <p class="s-note">Max tasks is the ceiling. Whatever the engine or Grok butler plans gets clamped to this before you ever see it.</p>
+
+        <div class="s-sub-h">Daily mix · per-sheet task count</div>
+        <p class="s-note">How many problems the <b>+ Add tasks</b> button on Today pulls from each sheet. Zero means skip that sheet. Also editable from the Today page's compact popover — this is just the full view.</p>
+        <div class="s-mix-grid" id="s-mix-grid">
+          ${renderDailyMixInputs(s)}
+        </div>
       </section>
 
       <section class="s-card" id="sec-grok">
@@ -550,6 +556,24 @@ function render(s, existingKey, existingSerp = "", existingYt = "") {
 
     <style>
       .settings { max-width: 1240px; margin: 0 auto; letter-spacing: -.003em; }
+
+      /* Daily-mix row (per-sheet task count) */
+      .settings .s-sub-h { font: 700 11px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); margin: 18px 0 6px; }
+      .settings .s-mix-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 8px; }
+      .settings .s-mix-row {
+        display: flex; justify-content: space-between; align-items: center; gap: 10px;
+        padding: 8px 10px; border-radius: 10px;
+        background: color-mix(in oklab, var(--mut) 4%, var(--paper));
+        border: 1px solid var(--line);
+      }
+      .settings .s-mix-name { font: 600 12.5px/1.3 var(--font-sans); color: var(--ink); margin: 0; letter-spacing: -.005em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .settings .s-mix-input {
+        width: 56px; padding: 6px 8px; border-radius: 8px;
+        background: var(--paper); border: 1px solid var(--line); color: var(--ink);
+        font: 700 13px/1 var(--font-sans); text-align: center;
+      }
+      .settings .s-mix-input:focus { outline: 2px solid var(--gold); outline-offset: -2px; }
+      .settings .s-mix-empty { color: var(--mut); font: 500 12.5px/1.5 var(--font-sans); padding: 8px; }
 
       /* ===== Editorial headline (matches Shop, Dashboard) ===== */
       .settings .s-headline {
@@ -1103,6 +1127,15 @@ async function persistAllFields(root) {
     st.schedule.sdIntDays = root.querySelector("#s-sdi").value
       .split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
 
+    // Persist daily-mix inputs (per-sheet task counts for the + Add tasks button).
+    const mix = {};
+    root.querySelectorAll("[data-mix-sheet]").forEach(input => {
+      const name = input.dataset.mixSheet;
+      const n = Math.max(0, Math.min(20, parseInt(input.value, 10) || 0));
+      mix[name] = n;
+    });
+    if (Object.keys(mix).length) st.schedule.dailyMix = mix;
+
     // Resolve the actual model id (never write the sentinel "__custom__" to disk).
     const resolved = resolveModelId(root);
     if (resolved) st.grok.model = resolved;
@@ -1146,6 +1179,27 @@ async function persistAllFields(root) {
     st.motivation.footerLine = root.querySelector("#s-footer").checked;
     st.motivation.tone = root.querySelector("#s-tone").value;
   });
+}
+
+function renderDailyMixInputs(s) {
+  const mix = (s.schedule && s.schedule.dailyMix) || {};
+  const sheets = Array.isArray(s.sheets) ? s.sheets : [];
+  // Union of (settings.sheets order) + any extras in dailyMix (so manually-
+  // tuned non-standard sheets stay visible). Guards against renames.
+  const names = [];
+  const seen = new Set();
+  for (const sh of sheets) { if (sh?.name && !seen.has(sh.name)) { names.push(sh.name); seen.add(sh.name); } }
+  for (const k of Object.keys(mix)) { if (!seen.has(k)) { names.push(k); seen.add(k); } }
+  if (!names.length) return `<div class="s-mix-empty">No sheets registered yet.</div>`;
+  return names.map(n => {
+    const cnt = Number.isFinite(mix[n]) ? mix[n] : 0;
+    return `
+      <div class="s-mix-row">
+        <label class="s-mix-name">${esc(n)}</label>
+        <input class="s-mix-input" data-mix-sheet="${esc(n)}" type="number" min="0" max="20" value="${cnt}" />
+      </div>
+    `;
+  }).join("");
 }
 
 function renderCsvFormat(label, file, columns, required, note) {
