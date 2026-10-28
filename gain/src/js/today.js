@@ -392,9 +392,9 @@ function paintPlan(root) {
           <div class="task-title-row">
             <div class="task-title">${kindPill}${kindPill ? " " : ""}${esc(t.title)}</div>
             ${companyChips}
-            ${chips ? `<div class="hover-chips">${chips}</div>` : ""}
           </div>
           <div class="task-meta">${esc(subFor(t))}</div>
+          ${chips ? `<div class="hover-chips">${chips}</div>` : ""}
           ${inProgressBar}
           ${needsRating ? `
             <div class="confidence-prompt" data-rate-ref="${esc(t.ref)}">
@@ -2330,9 +2330,14 @@ function companyChipsFor(t) {
   if (!row || !sh.headers?.length) return "";
   const col = sh.headers.find(h => /^compan(y|ies)$/i.test(h));
   if (!col || !row[col]) return "";
-  const companies = String(row[col]).split(",").map(s => s.trim()).filter(Boolean).slice(0, 5);
-  if (!companies.length) return "";
-  return `<span class="task-companies">${companies.map(c => _companyIconHtml(c, 22)).join("")}</span>`;
+  const all = String(row[col]).split(",").map(s => s.trim()).filter(Boolean);
+  if (!all.length) return "";
+  // Cap at 3 visible logos so the title row doesn't get crowded; show "+N" chip
+  // for the remainder, hovering the strip can be a future extension.
+  const visible = all.slice(0, 3);
+  const extra = all.length - visible.length;
+  const more = extra > 0 ? `<span class="task-companies-more">+${extra}</span>` : "";
+  return `<span class="task-companies">${visible.map(c => _companyIconHtml(c, 18)).join("")}${more}</span>`;
 }
 function badgeFor(t) {
   // Note: difficulty for DSA now lives in a hover-chip, not the badge.
@@ -3453,28 +3458,36 @@ function styles() {
     .today .task-row.done { cursor: default; }
     .today .task-row.done .task-main { cursor: default; }
 
-    /* ---- Hover-only chips (difficulty, LC#, freq) ---- */
+    /* ---- Title row = ONLY title + tiny company stack; chips move to own row ---- */
     .today .task-title-row {
       display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;
+      min-width: 0;
     }
-    .today .task-title-row .task-title { flex: 0 1 auto; min-width: 0; }
+    .today .task-title-row .task-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    /* Chip strip lives BELOW the title + meta; hover-only reveal, 0 height
+       when collapsed so it doesn't push the row taller. */
     .today .hover-chips {
-      display: inline-flex; align-items: center; gap: 5px;
-      opacity: 0; transform: translateX(-4px);
-      transition: opacity 220ms cubic-bezier(.2,1.2,.3,1), transform 220ms cubic-bezier(.2,1.2,.3,1);
+      display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+      margin-top: 6px; max-height: 0; overflow: hidden;
+      opacity: 0;
+      transition: max-height 220ms cubic-bezier(.2,1.2,.3,1), opacity 180ms ease, margin-top 180ms ease;
       pointer-events: none;
     }
     .today .task-row:hover .hover-chips,
     .today .task-row:focus-within .hover-chips {
-      opacity: 1; transform: translateX(0);
+      opacity: 1; max-height: 60px; pointer-events: auto;
     }
-    /* Company logo mini-chips — always visible on task rows (icons from companies.js) */
+    /* Company logo mini-chips — compact (18px), capped at 3 + "+N" */
     .today .task-companies {
-      display: inline-flex; align-items: center; gap: 4px;
-      margin-left: 8px; flex-shrink: 0;
+      display: inline-flex; align-items: center; gap: 3px;
+      margin-left: auto; flex-shrink: 0; padding-left: 10px;
     }
     .today .task-companies .co-ico {
       border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .today .task-companies-more {
+      font: 600 10.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .02em;
+      padding: 0 4px; margin-left: 2px;
     }
     .today .hover-chip {
       padding: 2px 8px; border-radius: 6px;

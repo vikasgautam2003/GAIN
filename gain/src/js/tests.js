@@ -399,13 +399,11 @@ function injectStyles() {
 
     .t-panel { max-width: 1120px; margin: 0 auto; }
 
-    /* === PICKER — professional assessment-tool shape === */
-    .t-picker-card {
-      background: var(--paper); border: 1px solid var(--line); border-radius: 10px;
-      overflow: hidden;
-    }
-    .t-section { padding: 24px 28px; border-bottom: 1px solid var(--line); }
-    .t-section:last-of-type { border-bottom: none; }
+    /* === PICKER — flows with the page, no enclosing box === */
+    .t-picker-card { }
+    .t-section { padding: 20px 0 28px; border-bottom: 1px solid var(--line); }
+    .t-section:last-of-type { border-bottom: none; padding-bottom: 10px; }
+    .t-section:first-of-type { padding-top: 4px; }
     .t-section-head {
       display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
       margin-bottom: 16px;
@@ -492,12 +490,13 @@ function injectStyles() {
       background: var(--ink); color: var(--paper); border-color: var(--ink); font-weight: 600;
     }
 
-    /* --- Launch panel: stats row + CTA (no gradients, no gold hero number) --- */
-    .t-launch { padding: 24px 28px; background: color-mix(in oklab, var(--ink) 2%, var(--paper)); }
+    /* --- Launch panel: stats row + CTA — borderless, flows with the page --- */
+    .t-launch { padding: 24px 0 10px; }
     .t-launch-grid {
       display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
-      padding: 18px 20px; margin-bottom: 20px;
-      background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+      padding: 16px 0 20px; margin-bottom: 18px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
     }
     @media (max-width: 640px) { .t-launch-grid { grid-template-columns: 1fr; } }
     .t-stat {
