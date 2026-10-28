@@ -1357,16 +1357,18 @@ function fireMicroConfetti(anchor) {
 function mountAddTasksButton(root) {
   const bar = document.getElementById("today-study-mode");
   if (!bar) return;
-  // Already mounted? skip
   if (bar.querySelector("#at-open-btn")) return;
-  // Build the button + wrap the bar's child so we can place it on the right
+  // Append INSIDE .sm-bar-row (next to the mode toggle) so the button sits
+  // horizontally beside the other controls instead of stretching across the
+  // whole bar width.
+  const row = bar.querySelector(".sm-bar-row") || bar;
   const btn = document.createElement("button");
   btn.id = "at-open-btn";
   btn.className = "at-open-btn";
   btn.type = "button";
   btn.title = "Add N tasks per sheet to today (Priority or Random)";
   btn.innerHTML = `<span>+</span> Add tasks`;
-  bar.appendChild(btn);
+  row.appendChild(btn);
   btn.addEventListener("click", async (e) => {
     e.stopPropagation();
     const { openAddTasksPopover } = await import("./addTasks.js");
@@ -1392,13 +1394,15 @@ function mountAddTestButton(root) {
   const bar = document.getElementById("today-study-mode");
   if (!bar) return;
   if (bar.querySelector("#today-add-test-btn")) return;
+  // Same row as Add tasks so they align horizontally, not stacked at full width.
+  const row = bar.querySelector(".sm-bar-row") || bar;
   const btn = document.createElement("button");
   btn.id = "today-add-test-btn";
   btn.className = "today-add-test-btn";
   btn.type = "button";
   btn.title = "Jump to the Tests page to pick a sheet, topics, length, and start a timed paper";
   btn.innerHTML = `<span>🎯</span> Add test`;
-  bar.appendChild(btn);
+  row.appendChild(btn);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     location.hash = "#tests";

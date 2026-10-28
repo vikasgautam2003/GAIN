@@ -36,9 +36,9 @@ function render() {
   return `
     <div class="view-inner tests">
       <header class="t-head">
-        <div class="t-eyebrow">🎯 TESTS</div>
-        <h1 class="t-title">Timed papers.</h1>
-        <p class="t-sub">Groq composes real interview-shaped papers — MCQs, written, coding. Timer. Scored. Bounty scales with your performance.</p>
+        <div class="t-eyebrow">ASSESSMENTS</div>
+        <h1 class="t-title">Tests</h1>
+        <p class="t-sub">Timed interview-shaped papers — multiple choice, written, and coding. Each paper is graded and scores feed back into your Mastery map.</p>
       </header>
 
       <nav class="t-tabs" role="tablist">
@@ -82,73 +82,63 @@ function renderNewTab() {
   const totalQ = shape.mcq + shape.written + shape.coding;
   const bountyEstimate = 100 + 10 * shape.mcq + 50 * shape.written + 100 * shape.coding;
 
-  const SHEET_ICONS = {
-    "DSA": "⚡", "SQL": "🗄", "System Design": "🏗",
-    "Integrations": "🔌", "Interview Extras": "🎯", "OS & Networking": "⚙",
-  };
-  const SHEET_TAGLINES = {
-    "DSA": "Code + MCQs",
-    "SQL": "Query + MCQs",
-    "System Design": "Design + MCQs",
-    "Integrations": "Scenarios + MCQs",
-    "Interview Extras": "MCQs only",
-    "OS & Networking": "Written + MCQs",
+  const SHEET_DESCRIPTIONS = {
+    "DSA": "Data structures & algorithms — coding problems + concept MCQs",
+    "SQL": "Query writing — SELECT/JOIN/GROUP + rules MCQs",
+    "System Design": "High-level design prompts + tradeoff MCQs",
+    "Integrations": "Real-world scenarios + protocols MCQs",
+    "Interview Extras": "Behavioral + leadership judgment MCQs",
+    "OS & Networking": "Core concepts — written explanations + MCQs",
   };
 
   return `
     <div class="t-picker-card">
-      <!-- STEP 1 — SHEET -->
-      <div class="t-step">
-        <div class="t-step-head">
-          <span class="t-step-num">01</span>
-          <h3>Pick a sheet</h3>
-          <span class="t-step-sub">one paper per sheet · pattern mix differs</span>
+      <!-- Sheet picker -->
+      <div class="t-section">
+        <div class="t-section-head">
+          <h3>Subject</h3>
+          <span class="t-section-sub">pick which sheet the paper draws from</span>
         </div>
         <div class="t-sheet-grid">
           ${names.map(n => {
-            const icon = SHEET_ICONS[n] || "📘";
-            const tag = SHEET_TAGLINES[n] || "";
+            const desc = SHEET_DESCRIPTIONS[n] || "";
             const selected = n === curSheet;
             return `
               <button class="t-sheet-tile ${selected ? "selected" : ""}" data-sheet="${esc(n)}">
-                <span class="t-sheet-ic">${icon}</span>
-                <span class="t-sheet-name">${esc(n)}</span>
-                <span class="t-sheet-tag">${esc(tag)}</span>
-                ${selected ? `<span class="t-sheet-check">✓</span>` : ""}
+                <div class="t-sheet-name">${esc(n)}</div>
+                <div class="t-sheet-desc">${esc(desc)}</div>
               </button>
             `;
           }).join("")}
         </div>
       </div>
 
-      <!-- STEP 2 — DIFFICULTY + LENGTH -->
-      <div class="t-step">
-        <div class="t-step-head">
-          <span class="t-step-num">02</span>
-          <h3>Shape the paper</h3>
-          <span class="t-step-sub">how hard · how long</span>
+      <!-- Difficulty + Length -->
+      <div class="t-section">
+        <div class="t-section-head">
+          <h3>Difficulty &amp; length</h3>
+          <span class="t-section-sub">interview-shaped — Quick is a warmup, Deep is a round</span>
         </div>
         <div class="t-shape-grid">
           <div class="t-shape-col">
-            <label class="t-shape-label">Difficulty</label>
-            <div class="t-pill-row">
+            <label class="t-section-label">Difficulty</label>
+            <div class="t-seg">
               ${["Easy", "Medium", "Hard", "Mixed"].map(d => `
-                <button class="t-pill ${pickerState.difficulty === d ? "active" : ""}" data-diff="${d}">${d}</button>
+                <button class="t-seg-btn ${pickerState.difficulty === d ? "active" : ""}" data-diff="${d}">${d}</button>
               `).join("")}
             </div>
           </div>
           <div class="t-shape-col">
-            <label class="t-shape-label">Length</label>
-            <div class="t-pill-row">
+            <label class="t-section-label">Length</label>
+            <div class="t-seg">
               ${[
-                { k: "quick", lbl: "Quick", m: paperShapeFor(curSheet, "quick").minutes, ic: "⚡" },
-                { k: "standard", lbl: "Standard", m: paperShapeFor(curSheet, "standard").minutes, ic: "📄" },
-                { k: "deep", lbl: "Deep", m: paperShapeFor(curSheet, "deep").minutes, ic: "📚" },
+                { k: "quick", lbl: "Quick", m: paperShapeFor(curSheet, "quick").minutes },
+                { k: "standard", lbl: "Standard", m: paperShapeFor(curSheet, "standard").minutes },
+                { k: "deep", lbl: "Deep", m: paperShapeFor(curSheet, "deep").minutes },
               ].map(x => `
-                <button class="t-pill t-pill-len ${pickerState.lengthMode === x.k ? "active" : ""}" data-len="${x.k}">
-                  <span class="t-pill-len-ic">${x.ic}</span>
+                <button class="t-seg-btn t-seg-btn-wide ${pickerState.lengthMode === x.k ? "active" : ""}" data-len="${x.k}">
                   <span>${x.lbl}</span>
-                  <span class="t-pill-len-m">${x.m}m</span>
+                  <span class="t-seg-btn-sub">${x.m}m</span>
                 </button>
               `).join("")}
             </div>
@@ -156,58 +146,49 @@ function renderNewTab() {
         </div>
       </div>
 
-      <!-- STEP 3 — TOPICS -->
+      <!-- Topics -->
       ${availableTopics.length ? `
-        <div class="t-step">
-          <div class="t-step-head">
-            <span class="t-step-num">03</span>
-            <h3>Narrow the topics</h3>
-            <span class="t-step-sub">
-              ${curTopics.length > 0
-                ? `<b>${curTopics.length}</b> selected · tap any to toggle`
-                : `empty = any pattern in this sheet`}
+        <div class="t-section">
+          <div class="t-section-head">
+            <h3>Topics</h3>
+            <span class="t-section-sub">
+              ${curTopics.length > 0 ? `${curTopics.length} selected` : "leave empty for any pattern in this sheet"}
             </span>
-            ${curTopics.length > 0 ? `<button class="t-clear-topics" id="t-clear-topics">Clear</button>` : ""}
+            ${curTopics.length > 0 ? `<button class="t-clear-topics" id="t-clear-topics">Clear selection</button>` : ""}
           </div>
           <div class="t-topic-bank">
             ${availableTopics.map(t => `
-              <button class="t-topic ${curTopics.includes(t) ? "selected" : ""}" data-topic="${esc(t)}">
-                <span>${esc(t)}</span>
-                ${curTopics.includes(t) ? `<span class="t-topic-check">✓</span>` : ""}
-              </button>
+              <button class="t-topic ${curTopics.includes(t) ? "selected" : ""}" data-topic="${esc(t)}">${esc(t)}</button>
             `).join("")}
           </div>
         </div>
       ` : ""}
 
-      <!-- PREVIEW + LAUNCH -->
+      <!-- Launch panel -->
       <div class="t-launch">
-        <div class="t-preview">
-          <div class="t-preview-stat t-preview-stat-hero">
-            <label>Total questions</label>
-            <b>${totalQ}</b>
+        <div class="t-launch-grid">
+          <div class="t-stat">
+            <div class="t-stat-label">Total questions</div>
+            <div class="t-stat-val">${totalQ}</div>
+            <div class="t-stat-sub">
+              ${shape.mcq ? `${shape.mcq} MCQ` : ""}${shape.mcq && shape.written ? " · " : ""}${shape.written ? `${shape.written} written` : ""}${(shape.mcq || shape.written) && shape.coding ? " · " : ""}${shape.coding ? `${shape.coding} coding` : ""}
+            </div>
           </div>
-          <div class="t-preview-divider"></div>
-          <div class="t-preview-breakdown">
-            ${shape.mcq ? `<span><b>${shape.mcq}</b> MCQ</span>` : ""}
-            ${shape.written ? `<span><b>${shape.written}</b> written</span>` : ""}
-            ${shape.coding ? `<span><b>${shape.coding}</b> coding</span>` : ""}
+          <div class="t-stat">
+            <div class="t-stat-label">Duration</div>
+            <div class="t-stat-val">${shape.minutes}<span class="t-stat-unit">min</span></div>
+            <div class="t-stat-sub">timer starts on click</div>
           </div>
-          <div class="t-preview-divider"></div>
-          <div class="t-preview-stat">
-            <label>Timer</label>
-            <b>${shape.minutes}<small>min</small></b>
-          </div>
-          <div class="t-preview-divider"></div>
-          <div class="t-preview-stat t-preview-stat-bounty">
-            <label>Max bounty</label>
-            <b>₹${bountyEstimate}</b>
+          <div class="t-stat">
+            <div class="t-stat-label">Max reward</div>
+            <div class="t-stat-val">₹${bountyEstimate}</div>
+            <div class="t-stat-sub">scales with score</div>
           </div>
         </div>
-        <button class="t-btn-primary" id="t-start">
-          <span>▶</span> Generate & Start test
-        </button>
-        <p class="t-start-note">Groq generates the paper (~30s). You can't pause the timer once it starts.</p>
+        <div class="t-launch-actions">
+          <button class="t-btn-primary" id="t-start">Begin test</button>
+          <p class="t-launch-note">Paper generates in ~30s. No pausing. Submit any time via <kbd>Submit</kbd> at the top-right.</p>
+        </div>
       </div>
     </div>
   `;
@@ -386,194 +367,176 @@ function injectStyles() {
   const s = document.createElement("style");
   s.id = "tests-page-styles";
   s.textContent = `
-    .tests { padding: 18px 16px 60px; max-width: 1120px; margin: 0 auto; }
-    .t-head { margin: 20px 0 20px; max-width: 820px; }
-    .t-eyebrow { font: 700 11.5px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase; color: var(--gold); margin-bottom: 10px; display: inline-block; }
-    .t-title { margin: 0 0 8px; font: 600 40px/1.04 var(--font-sans); letter-spacing: -.028em; color: var(--ink); }
-    .t-sub { font: 400 14.5px/1.55 var(--font-sans); color: var(--mut); margin: 0; max-width: 60ch; }
+    .tests { padding: 24px 24px 60px; max-width: 1080px; margin: 0 auto; }
+    .t-head { margin: 4px 0 24px; max-width: 760px; }
+    .t-eyebrow {
+      font: 600 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase;
+      color: var(--mut); margin-bottom: 10px; display: block;
+    }
+    .t-title { margin: 0 0 8px; font: 600 26px/1.2 var(--font-sans); letter-spacing: -.018em; color: var(--ink); }
+    .t-sub { font: 400 13.5px/1.55 var(--font-sans); color: var(--mut); margin: 0; max-width: 62ch; }
 
     .t-tabs {
-      display: inline-flex; gap: 2px; margin: 4px 0 20px;
-      padding: 5px; border-radius: 14px;
-      background: color-mix(in oklab, var(--mut) 8%, var(--paper));
-      border: 1px solid var(--line);
+      display: flex; gap: 0; margin: 4px 0 22px;
+      border-bottom: 1px solid var(--line);
     }
     .t-tab {
-      display: inline-flex; align-items: center; gap: 9px;
-      padding: 9px 16px; border-radius: 10px; border: none; background: transparent;
-      font: 600 13px/1 var(--font-sans); color: var(--mut); cursor: pointer;
-      transition: all .2s ease;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 18px; border: none; background: transparent;
+      font: 500 13px/1 var(--font-sans); color: var(--mut); cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color .14s ease, border-color .14s ease;
     }
     .t-tab:hover { color: var(--ink); }
-    .t-tab.active { background: var(--paper); color: var(--ink); box-shadow: 0 2px 4px rgba(0,0,0,.06), 0 0 0 1px var(--line); }
+    .t-tab.active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
     .t-tab-count {
-      font: 700 10.5px/1 var(--font-sans); color: var(--mut);
-      background: color-mix(in oklab, var(--mut) 14%, transparent);
-      padding: 3px 7px; border-radius: 999px; min-width: 20px; text-align: center;
+      font: 500 11px/1 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); color: var(--mut);
+      padding: 2px 6px; border-radius: 3px;
+      background: color-mix(in oklab, var(--ink) 6%, var(--paper));
     }
-    .t-tab.active .t-tab-count { background: var(--gold); color: var(--paper); }
+    .t-tab.active .t-tab-count { color: var(--ink); background: color-mix(in oklab, var(--ink) 10%, var(--paper)); font-weight: 600; }
 
     .t-panel { max-width: 1120px; margin: 0 auto; }
 
-    /* === NEW PICKER CARD === */
+    /* === PICKER — professional assessment-tool shape === */
     .t-picker-card {
-      background: var(--paper); border: 1px solid var(--line); border-radius: 18px;
-      padding: 6px 4px;
-      box-shadow: 0 2px 8px -2px rgba(0,0,0,.04);
+      background: var(--paper); border: 1px solid var(--line); border-radius: 10px;
       overflow: hidden;
     }
-
-    .t-step {
-      padding: 22px 26px;
-      border-bottom: 1px solid var(--line);
-    }
-    .t-step:last-of-type { border-bottom: none; }
-    .t-step-head {
-      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    .t-section { padding: 24px 28px; border-bottom: 1px solid var(--line); }
+    .t-section:last-of-type { border-bottom: none; }
+    .t-section-head {
+      display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
       margin-bottom: 16px;
     }
-    .t-step-num {
-      font: 800 11px/1 var(--font-sans); letter-spacing: .18em;
-      color: var(--gold); padding: 5px 9px; border-radius: 6px;
-      background: color-mix(in oklab, var(--gold) 14%, var(--paper));
+    .t-section-head h3 {
+      margin: 0; font: 600 15px/1.3 var(--font-sans); color: var(--ink); letter-spacing: -.012em;
     }
-    .t-step-head h3 {
-      margin: 0; font: 600 16px/1.25 var(--font-sans); color: var(--ink); letter-spacing: -.015em;
+    .t-section-sub {
+      font: 500 12.5px/1.35 var(--font-sans); color: var(--mut); letter-spacing: .005em;
     }
-    .t-step-sub {
-      margin-left: auto;
-      font: 500 12px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .01em;
+    .t-section-label {
+      font: 600 11px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase;
+      color: var(--mut); margin-bottom: 8px; display: block;
     }
-    .t-step-sub b { color: var(--ink); font-weight: 700; }
     .t-clear-topics {
-      padding: 5px 10px; border-radius: 6px;
-      background: var(--paper); border: 1px solid var(--line); color: var(--mut);
-      font: 600 11px/1 var(--font-sans); cursor: pointer;
-    }
-    .t-clear-topics:hover { color: var(--red); border-color: var(--red); }
-
-    /* --- Sheet grid --- */
-    .t-sheet-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 10px;
-    }
-    .t-sheet-tile {
-      position: relative; display: flex; flex-direction: column; gap: 4px;
-      padding: 14px 16px; text-align: left;
-      background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
-      cursor: pointer; transition: all .14s ease;
-    }
-    .t-sheet-tile:hover {
-      border-color: var(--line2); transform: translateY(-1px);
-      box-shadow: 0 4px 12px -4px rgba(0,0,0,.08);
-    }
-    .t-sheet-tile.selected {
-      border-color: color-mix(in oklab, var(--gold) 50%, var(--line));
-      background: linear-gradient(135deg,
-        color-mix(in oklab, var(--gold) 14%, var(--paper)) 0%,
-        color-mix(in oklab, var(--gold) 4%, var(--paper)) 100%);
-      box-shadow: 0 6px 16px -6px color-mix(in oklab, var(--gold) 50%, transparent);
-    }
-    .t-sheet-ic {
-      font-size: 22px; line-height: 1; margin-bottom: 2px;
-    }
-    .t-sheet-name {
-      font: 700 14px/1.2 var(--font-sans); color: var(--ink); letter-spacing: -.012em;
-    }
-    .t-sheet-tag {
-      font: 500 11.5px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .01em;
-    }
-    .t-sheet-check {
-      position: absolute; top: 10px; right: 12px;
-      font: 800 13px/1 var(--font-sans); color: var(--gold);
-      width: 20px; height: 20px; border-radius: 50%;
-      background: var(--paper); border: 1px solid color-mix(in oklab, var(--gold) 50%, var(--line));
-      display: inline-flex; align-items: center; justify-content: center;
-    }
-
-    /* --- Shape (difficulty + length) --- */
-    .t-shape-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    @media (max-width: 640px) { .t-shape-grid { grid-template-columns: 1fr; } }
-    .t-shape-col { display: flex; flex-direction: column; gap: 8px; }
-    .t-shape-label { font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
-    .t-pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
-    .t-pill {
-      padding: 9px 14px; border-radius: 10px;
-      background: var(--paper); border: 1px solid var(--line); color: var(--ink);
-      font: 600 12.5px/1 var(--font-sans); cursor: pointer;
+      margin-left: auto;
+      padding: 6px 11px; border-radius: 6px;
+      background: transparent; border: 1px solid var(--line); color: var(--mut);
+      font: 500 11.5px/1 var(--font-sans); cursor: pointer;
       transition: all .14s ease;
     }
-    .t-pill:hover { border-color: var(--line2); background: color-mix(in oklab, var(--ink) 3%, var(--paper)); }
-    .t-pill.active {
-      background: var(--ink); color: var(--paper); border-color: var(--ink);
-      box-shadow: 0 2px 6px -2px rgba(0,0,0,.2);
-    }
-    .t-pill-len { display: inline-flex; align-items: center; gap: 7px; }
-    .t-pill-len-ic { font-size: 13px; opacity: .85; }
-    .t-pill-len-m { font-weight: 500; color: var(--mut); letter-spacing: .02em; }
-    .t-pill-len.active .t-pill-len-m { color: var(--paper); opacity: .8; }
+    .t-clear-topics:hover { color: var(--ink); border-color: var(--line2); }
 
-    /* --- Topic bank --- */
-    .t-topic-bank {
-      display: flex; flex-wrap: wrap; gap: 6px;
-      max-height: 260px; overflow-y: auto;
-      padding: 10px 12px; border-radius: 10px;
-      background: color-mix(in oklab, var(--mut) 5%, var(--paper));
+    /* --- Sheet grid: no emoji, no gold gradient, muted selection --- */
+    .t-sheet-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 8px;
+    }
+    .t-sheet-tile {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 14px 16px; text-align: left;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+      cursor: pointer; transition: border-color .14s ease, background .14s ease;
+    }
+    .t-sheet-tile:hover { border-color: var(--line2); }
+    .t-sheet-tile.selected {
+      border-color: var(--ink);
+      background: color-mix(in oklab, var(--ink) 3%, var(--paper));
+      box-shadow: inset 3px 0 0 var(--ink);
+    }
+    .t-sheet-name {
+      font: 600 14px/1.3 var(--font-sans); color: var(--ink); letter-spacing: -.012em;
+    }
+    .t-sheet-desc {
+      font: 400 12.5px/1.45 var(--font-sans); color: var(--mut);
+    }
+
+    /* --- Difficulty + Length: segmented controls (no colored pills) --- */
+    .t-shape-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+    @media (max-width: 640px) { .t-shape-grid { grid-template-columns: 1fr; } }
+    .t-shape-col { display: flex; flex-direction: column; }
+    .t-seg {
+      display: inline-flex; padding: 3px; border-radius: 7px;
+      background: color-mix(in oklab, var(--ink) 5%, var(--paper));
       border: 1px solid var(--line);
+      width: fit-content; max-width: 100%; flex-wrap: wrap;
+    }
+    .t-seg-btn {
+      padding: 7px 14px; border-radius: 5px; border: none; background: transparent;
+      font: 500 12.5px/1 var(--font-sans); color: var(--mut); cursor: pointer;
+      transition: color .14s ease, background .14s ease;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .t-seg-btn:hover { color: var(--ink); }
+    .t-seg-btn.active { background: var(--paper); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+    .t-seg-btn-wide { padding: 8px 16px; }
+    .t-seg-btn-sub { font-size: 11px; color: var(--mut); font-weight: 500; letter-spacing: .02em; }
+    .t-seg-btn.active .t-seg-btn-sub { color: var(--mut); }
+
+    /* --- Topics: flat chip bank --- */
+    .t-topic-bank {
+      display: flex; flex-wrap: wrap; gap: 5px;
+      max-height: 260px; overflow-y: auto;
+      padding: 2px;
     }
     .t-topic {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 7px 12px; border-radius: 8px;
-      background: var(--paper); border: 1px solid var(--line); color: var(--mut);
+      padding: 6px 11px; border-radius: 5px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--ink);
       font: 500 12px/1 var(--font-sans); cursor: pointer;
       transition: all .12s ease;
     }
-    .t-topic:hover { color: var(--ink); border-color: var(--line2); }
+    .t-topic:hover { background: color-mix(in oklab, var(--ink) 4%, var(--paper)); border-color: var(--line2); }
     .t-topic.selected {
-      background: color-mix(in oklab, var(--gold) 18%, var(--paper));
-      border-color: color-mix(in oklab, var(--gold) 44%, var(--line));
-      color: var(--ink); font-weight: 700;
+      background: var(--ink); color: var(--paper); border-color: var(--ink); font-weight: 600;
     }
-    .t-topic-check { font-weight: 800; color: var(--gold); font-size: 11px; }
 
-    /* --- Launch section (preview + button) --- */
-    .t-launch {
-      padding: 24px 26px;
-      background: linear-gradient(180deg, color-mix(in oklab, var(--ink) 2%, var(--paper)) 0%, var(--paper) 100%);
-      display: flex; flex-direction: column; gap: 14px;
+    /* --- Launch panel: stats row + CTA (no gradients, no gold hero number) --- */
+    .t-launch { padding: 24px 28px; background: color-mix(in oklab, var(--ink) 2%, var(--paper)); }
+    .t-launch-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
+      padding: 18px 20px; margin-bottom: 20px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
     }
-    .t-preview {
-      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-      padding: 16px 20px; border-radius: 14px;
-      background: var(--paper);
-      border: 1px solid color-mix(in oklab, var(--ink) 10%, var(--line));
-      box-shadow: 0 4px 12px -4px rgba(0,0,0,.06);
+    @media (max-width: 640px) { .t-launch-grid { grid-template-columns: 1fr; } }
+    .t-stat {
+      display: flex; flex-direction: column; gap: 4px;
+      padding-right: 18px; border-right: 1px solid var(--line);
     }
-    .t-preview-stat { display: flex; flex-direction: column; gap: 2px; }
-    .t-preview-stat label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
-    .t-preview-stat b { font: 800 24px/1 var(--font-sans); color: var(--ink); letter-spacing: -.028em; }
-    .t-preview-stat b small { font: 500 11px/1 var(--font-sans); color: var(--mut); margin-left: 3px; }
-    .t-preview-stat-hero b { font-size: 32px; color: var(--gold); }
-    .t-preview-stat-bounty b { color: var(--gold); }
-    .t-preview-divider { width: 1px; height: 36px; background: var(--line); }
-    .t-preview-breakdown {
-      display: flex; flex-direction: column; gap: 3px;
-      font: 500 12px/1.4 var(--font-sans); color: var(--mut); letter-spacing: .01em;
+    .t-stat:last-child { padding-right: 0; border-right: none; }
+    @media (max-width: 640px) { .t-stat { padding-right: 0; border-right: none; padding-bottom: 14px; border-bottom: 1px solid var(--line); } .t-stat:last-child { padding-bottom: 0; border-bottom: none; } }
+    .t-stat-label {
+      font: 600 10.5px/1 var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--mut);
     }
-    .t-preview-breakdown span b { color: var(--ink); font-weight: 700; font-size: 13.5px; margin-right: 3px; }
+    .t-stat-val {
+      font: 500 24px/1 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+      color: var(--ink); letter-spacing: -.015em;
+      display: flex; align-items: baseline; gap: 4px;
+    }
+    .t-stat-unit {
+      font: 500 11.5px/1 var(--font-sans); color: var(--mut); letter-spacing: .02em;
+      text-transform: lowercase;
+    }
+    .t-stat-sub {
+      font: 400 11.5px/1.4 var(--font-sans); color: var(--mut);
+    }
 
+    .t-launch-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
     .t-btn-primary {
-      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      padding: 14px 24px; border-radius: 12px;
-      background: linear-gradient(180deg, var(--ink) 0%, color-mix(in oklab, var(--ink) 92%, black) 100%);
-      color: var(--paper); border: none;
-      font: 700 14px/1 var(--font-sans); letter-spacing: -.005em; cursor: pointer;
-      transition: all .14s ease;
-      box-shadow: 0 6px 18px -4px rgba(0,0,0,.25);
+      padding: 11px 24px; border-radius: 6px;
+      background: var(--ink); color: var(--paper); border: none;
+      font: 600 13.5px/1 var(--font-sans); letter-spacing: .01em; cursor: pointer;
+      transition: background .14s ease, transform .14s ease;
     }
-    .t-btn-primary:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); box-shadow: 0 8px 20px -4px rgba(0,0,0,.3); }
+    .t-btn-primary:hover:not(:disabled) { background: color-mix(in oklab, var(--ink) 90%, black); transform: translateY(-1px); }
     .t-btn-primary:disabled { opacity: .7; cursor: progress; }
-    .t-btn-primary span:first-child { font-size: 14px; }
+    .t-launch-note { font: 400 12px/1.45 var(--font-sans); color: var(--mut); margin: 0; flex: 1; min-width: 220px; }
+    .t-launch-note kbd {
+      font: 500 11px/1 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+      padding: 1px 5px; border-radius: 3px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--ink);
+    }
     .t-spin {
       display: inline-block; width: 12px; height: 12px; border-radius: 50%;
       border: 2px solid color-mix(in oklab, var(--paper) 50%, transparent);
@@ -581,7 +544,6 @@ function injectStyles() {
       animation: tSpin .7s linear infinite;
     }
     @keyframes tSpin { to { transform: rotate(360deg); } }
-    .t-start-note { font: 500 11.5px/1.4 var(--font-sans); color: var(--mut); margin: 0; }
 
     /* --- Past attempts --- */
     .t-empty { padding: 48px 24px; text-align: center;
