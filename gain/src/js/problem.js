@@ -466,7 +466,13 @@ function attach(root, { sheetName, idx, row, value, lcCol, linkCol, notesCol, so
 
   peekBtn?.addEventListener("click", async () => {
     if (isPeeked()) return;
-    const ok = confirm(`✦ Peek the pattern?\n\nThis will reveal the pattern name only (no code, no logic).\nYour bounty drops from ₹${value} to ₹${minBounty}.\n\nContinue?`);
+    const { confirmDanger } = await import("./modals.js");
+    const ok = await confirmDanger({
+      title: "✦ Peek the pattern?",
+      message: `This reveals the pattern name only — no code, no logic. Your bounty for this problem drops from ₹${value} to ₹${minBounty}.`,
+      confirmLabel: "Peek · drop bounty",
+      consequences: [`Bounty: ₹${value} → ₹${minBounty}`, "The ★ rating you give later still applies"],
+    });
     if (!ok) return;
     peekBtn.disabled = true;
     peekBtn.textContent = "Asking Groq…";

@@ -1060,7 +1060,8 @@ function openAddRowModal(sheetName, root) {
         await addSheetRow(sheetName, patch);
         close();
       } catch (err) {
-        alert(`Could not add row: ${err.message || err}`);
+        const { showAlert } = await import("./modals.js");
+        await showAlert({ title: "Could not add row", message: String(err.message || err), tone: "error" });
       }
     }
   });

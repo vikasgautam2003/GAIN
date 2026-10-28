@@ -526,7 +526,13 @@ async function renderStreakPop(pop) {
   pop.querySelector("#sp-protect")?.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (!protectCandidate) return;
-    const ok = confirm(`❄ Protect ${protectCandidate.label} with 1 freeze token?\n\nThis marks it as a green day for the streak chain. The token is consumed. Not reversible.`);
+    const { confirmDanger } = await import("./modals.js");
+    const ok = await confirmDanger({
+      title: `Protect ${protectCandidate.label} with a freeze token?`,
+      message: "This marks the day as green for the streak chain. The token is consumed.",
+      confirmLabel: "Use freeze token",
+      consequences: ["1 streak-freeze token consumed", "Day locked as green — can't be undone"],
+    });
     if (!ok) return;
     await applyFreezeToken(protectCandidate.key);
     renderStreakPop(pop);
@@ -738,7 +744,11 @@ function openStartSessionModal() {
 
   modal.querySelector("#ss-build").addEventListener("click", async () => {
     const prompt = modal.querySelector("#ss-prompt").value.trim();
-    if (!prompt) return alert("Describe the session first.");
+    if (!prompt) {
+      const { showAlert } = await import("./modals.js");
+      await showAlert({ title: "Describe the session", message: "Add a short description so Groq knows what to build.", tone: "warn" });
+      return;
+    }
     const resultEl = modal.querySelector("#ss-result");
     const btn = modal.querySelector("#ss-build");
     btn.disabled = true;

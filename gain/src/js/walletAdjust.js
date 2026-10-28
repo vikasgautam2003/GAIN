@@ -88,8 +88,16 @@ export function openWalletAdjustModal() {
       const mode = modalRoot.querySelector("[data-wa-mode].active").dataset.waMode;
       const amtRaw = Number(modalRoot.querySelector("#wa-input").value) || 0;
       const reason = (modalRoot.querySelector("#wa-reason").value || "").trim();
-      if (amtRaw <= 0) { alert("Amount must be greater than zero."); return; }
-      if (!reason) { alert("Please add a short reason — it goes on the ledger."); return; }
+      if (amtRaw <= 0) {
+        const { showAlert } = await import("./modals.js");
+        await showAlert({ title: "Amount missing", message: "Enter a value greater than zero.", tone: "warn" });
+        return;
+      }
+      if (!reason) {
+        const { showAlert } = await import("./modals.js");
+        await showAlert({ title: "Reason required", message: "Add a short reason — it goes on the wallet ledger so you can audit the change later.", tone: "warn" });
+        return;
+      }
 
       const delta = mode === "+" ? amtRaw : -amtRaw;
       const confirmLabel = mode === "+" ? `Add ₹${amtRaw.toLocaleString()}` : `Subtract ₹${amtRaw.toLocaleString()}`;

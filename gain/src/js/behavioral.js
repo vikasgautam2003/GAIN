@@ -301,8 +301,14 @@ function wirePanel(root, panel) {
   panel.querySelectorAll("[data-story-id]").forEach(card => {
     const id = card.dataset.storyId;
     card.querySelector("[data-act=edit]")?.addEventListener("click", () => { editingId = id; paint(root); });
-    card.querySelector("[data-act=delete]")?.addEventListener("click", () => {
-      if (!confirm("Delete this story? This cannot be undone.")) return;
+    card.querySelector("[data-act=delete]")?.addEventListener("click", async () => {
+      const { confirmDanger } = await import("./modals.js");
+      const ok = await confirmDanger({
+        title: "Delete this story?",
+        message: "This can't be undone.",
+        confirmLabel: "Delete story",
+      });
+      if (!ok) return;
       const stories = loadStories().filter(s => s.id !== id);
       saveStories(stories);
       if (editingId === id) editingId = null;
@@ -360,8 +366,10 @@ function wirePanel(root, panel) {
       if (!p) return;
       openPromptEditor(root, p);
     });
-    card.querySelector("[data-act=prompt-delete]")?.addEventListener("click", () => {
-      if (!window.confirm("Delete this prompt?")) return;
+    card.querySelector("[data-act=prompt-delete]")?.addEventListener("click", async () => {
+      const { confirmDanger } = await import("./modals.js");
+      const ok = await confirmDanger({ title: "Delete this prompt?", message: "This BQ prompt will be removed from your catalog.", confirmLabel: "Delete prompt" });
+      if (!ok) return;
       savePrompts(loadPrompts().filter(p => p.id !== id));
       paint(root);
     });
@@ -420,7 +428,11 @@ async function polishStory(story, root) {
   try {
     const apiKey = (await secure.get("groq_api_key").catch(() => null)) ||
                    (await secure.get("grok_api_key").catch(() => null));
-    if (!apiKey) { alert("No Groq API key — add one in Settings → AI butler."); return; }
+    if (!apiKey) {
+      const { showAlert } = await import("./modals.js");
+      await showAlert({ title: "Groq API key needed", message: "Add a Groq API key in Settings → AI butler to use ✦ Polish.", tone: "warn" });
+      return;
+    }
     const system = `You are a senior FDE interviewer coach. Lightly polish the student's STAR story so it reads TIGHT and INTERVIEW-READY. Preserve their voice and content — do NOT fabricate specifics. Return VALID JSON matching this shape:
 {
   "title": "a short memorable title (3-6 words)",
@@ -441,7 +453,11 @@ T: ${story.task || ""}
 A: ${story.action || ""}
 R: ${story.result || ""}`;
     const res = await callGroqJSON({ apiKey, system, user, maxTokens: 1024, label: "behavioral-polish" });
-    if (!res.ok) { alert("Polish failed: " + res.error); return; }
+    if (!res.ok) {
+      const { showAlert } = await import("./modals.js");
+      await showAlert({ title: "Polish failed", message: res.error || "Groq returned an error.", tone: "error" });
+      return;
+    }
     const d = res.data;
     const stories = loadStories();
     const idx = stories.findIndex(x => x.id === story.id);
@@ -458,7 +474,8 @@ R: ${story.result || ""}`;
     saveStories(stories);
     paint(root);
   } catch (e) {
-    alert("Polish error: " + (e.message || e));
+    const { showAlert } = await import("./modals.js");
+    await showAlert({ title: "Polish error", message: String(e.message || e), tone: "error" });
   }
 }
 

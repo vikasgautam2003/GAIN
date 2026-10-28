@@ -1261,7 +1261,11 @@ function openRewardEditModal(r, root) {
       const fileInput = modalRoot.querySelector("[data-f=imageFile]");
       const file = fileInput?.files?.[0];
       if (file) {
-        if (file.size > 1024 * 1024) { alert("Image too large (≤1MB)"); return; }
+        if (file.size > 1024 * 1024) {
+          const { showAlert } = await import("./modals.js");
+          await showAlert({ title: "Image too large", message: "Pick a file ≤ 1 MB.", tone: "warn" });
+          return;
+        }
         patch.imageUrl = await fileToDataUrl(file);
       }
       await updateReward(r.id, patch);

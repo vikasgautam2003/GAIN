@@ -1755,7 +1755,12 @@ function attachHandlers(root) {
       const key = input.dataset.soundKey;
       const file = e.target.files?.[0];
       if (!file) return;
-      if (file.size > 500 * 1024) { alert("Audio file too large. Keep it under 500 KB."); input.value = ""; return; }
+      if (file.size > 500 * 1024) {
+        const { showAlert } = await import("./modals.js");
+        await showAlert({ title: "Audio too large", message: "Pick a file ≤ 500 KB.", tone: "warn" });
+        input.value = "";
+        return;
+      }
       const dataUrl = await fileToDataUrl(file);
       await updateSettings(st => { st.sound[`custom${cap(key)}`] = dataUrl; });
       root.querySelector(`#ss-state-${key}`).textContent = "custom · loaded";

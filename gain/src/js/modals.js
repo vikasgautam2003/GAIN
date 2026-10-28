@@ -78,6 +78,107 @@ export function confirmDanger(opts = {}) {
   });
 }
 
+// ---- Branded alert modal — replaces native window.alert() so Tauri's native
+// macOS dialog never surfaces. opts: { title?, message, okLabel?, tone? }
+// tone: "info" (default) | "warn" | "error" | "success".
+// Returns Promise<void> that resolves after OK/Esc/outside-click.
+export function showAlert(opts = {}) {
+  const {
+    title = "GAIN",
+    message = "",
+    okLabel = "OK",
+    tone = "info",
+  } = opts;
+
+  return new Promise(resolve => {
+    closeActive();
+    const scrim = document.createElement("div");
+    scrim.className = `modal-scrim alert-scrim alert-tone-${tone}`;
+    scrim.innerHTML = `
+      <div class="modal alert-modal" role="alertdialog" aria-modal="true" aria-labelledby="amt">
+        <div class="alert-head">
+          <div class="alert-icon" aria-hidden="true">${renderToneIcon(tone)}</div>
+          <h2 id="amt" class="alert-title">${esc(title)}</h2>
+        </div>
+        <div class="alert-body">
+          <p class="alert-msg">${esc(message)}</p>
+        </div>
+        <div class="alert-actions">
+          <button class="alert-ok" type="button">${esc(okLabel)}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(scrim);
+    activeScrim = scrim;
+    requestAnimationFrame(() => scrim.classList.add("show"));
+    document.addEventListener("keydown", onEsc, true);
+
+    const done = () => { if (activeScrim !== scrim) return; resolve(); closeActive(); };
+    scrim.querySelector(".alert-ok").addEventListener("click", done);
+    scrim.addEventListener("click", (e) => { if (e.target === scrim) done(); });
+    setTimeout(() => scrim.querySelector(".alert-ok")?.focus(), 50);
+  });
+}
+
+// ---- Branded two-button confirm — replaces native window.confirm() for
+// non-destructive questions. For destructive confirms (delete / drop /
+// overwrite), use confirmDanger instead so the user sees the red warning.
+// opts: { title?, message, confirmLabel?, cancelLabel?, tone? }
+export function showConfirm(opts = {}) {
+  const {
+    title = "GAIN",
+    message = "",
+    confirmLabel = "Continue",
+    cancelLabel = "Cancel",
+    tone = "info",
+  } = opts;
+
+  return new Promise(resolve => {
+    closeActive();
+    const scrim = document.createElement("div");
+    scrim.className = `modal-scrim alert-scrim alert-tone-${tone}`;
+    scrim.innerHTML = `
+      <div class="modal alert-modal" role="alertdialog" aria-modal="true" aria-labelledby="cmt">
+        <div class="alert-head">
+          <div class="alert-icon" aria-hidden="true">${renderToneIcon(tone)}</div>
+          <h2 id="cmt" class="alert-title">${esc(title)}</h2>
+        </div>
+        <div class="alert-body">
+          <p class="alert-msg">${esc(message)}</p>
+        </div>
+        <div class="alert-actions alert-actions-two">
+          <button class="alert-cancel" type="button">${esc(cancelLabel)}</button>
+          <button class="alert-confirm" type="button">${esc(confirmLabel)}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(scrim);
+    activeScrim = scrim;
+    requestAnimationFrame(() => scrim.classList.add("show"));
+    document.addEventListener("keydown", onEsc, true);
+
+    const done = (ok) => { if (activeScrim !== scrim) return; resolve(ok); closeActive(); };
+    scrim.querySelector(".alert-cancel").addEventListener("click", () => done(false));
+    scrim.querySelector(".alert-confirm").addEventListener("click", () => done(true));
+    scrim.addEventListener("click", (e) => { if (e.target === scrim) done(false); });
+    setTimeout(() => scrim.querySelector(".alert-cancel")?.focus(), 50);
+  });
+}
+
+function renderToneIcon(tone) {
+  if (tone === "warn") {
+    return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>`;
+  }
+  if (tone === "error") {
+    return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+  }
+  if (tone === "success") {
+    return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+  }
+  // info (default)
+  return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+}
+
 // ---- Generic form modal.
 // opts: { title, subtitle?, bodyHtml, saveLabel?, extraButtons?: [{label, variant, onClick(close)}], onSave(root, close) }
 // Returns the modal root so caller can also close/manipulate externally.
@@ -218,6 +319,54 @@ export function openFormModal(opts = {}) {
     }
     .danger-confirm:hover { background: #c73840; transform: translateY(-1px); }
     .danger-confirm:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+    /* === Branded alert / confirm (replaces native window.alert / confirm) === */
+    .alert-modal {
+      width: min(440px, 92vw); border-radius: 18px;
+      overflow: hidden;
+    }
+    .alert-head {
+      display: flex; align-items: center; gap: 12px;
+      padding: 20px 22px 10px;
+    }
+    .alert-icon {
+      width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .alert-tone-info .alert-icon { background: color-mix(in oklab, var(--blue, #3870ff) 12%, var(--paper)); color: var(--blue, #3870ff); }
+    .alert-tone-warn .alert-icon { background: color-mix(in oklab, var(--gold) 16%, var(--paper)); color: var(--gold); }
+    .alert-tone-error .alert-icon { background: color-mix(in oklab, var(--red) 14%, var(--paper)); color: var(--red); }
+    .alert-tone-success .alert-icon { background: color-mix(in oklab, var(--green) 14%, var(--paper)); color: var(--green); }
+    .alert-title {
+      margin: 0; font: 600 17px/1.3 var(--font-sans); color: var(--ink); letter-spacing: -.015em;
+    }
+    .alert-body {
+      padding: 4px 22px 18px;
+    }
+    .alert-msg {
+      margin: 0; font: 500 14px/1.55 var(--font-sans); color: var(--ink); letter-spacing: -.005em;
+      white-space: pre-wrap;
+    }
+    .alert-actions {
+      display: flex; justify-content: flex-end; gap: 10px;
+      padding: 14px 22px 20px;
+    }
+    .alert-actions.alert-actions-two { justify-content: flex-end; }
+    .alert-ok, .alert-confirm {
+      padding: 10px 22px; border-radius: 999px; border: none;
+      background: var(--ink); color: var(--paper);
+      font: 600 13.5px/1 var(--font-sans); letter-spacing: -.005em; cursor: pointer;
+      transition: filter .14s ease, transform .14s ease;
+    }
+    .alert-ok:hover, .alert-confirm:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    .alert-ok:focus-visible, .alert-confirm:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+    .alert-cancel {
+      padding: 10px 22px; border-radius: 999px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--ink);
+      font: 600 13.5px/1 var(--font-sans); letter-spacing: -.005em; cursor: pointer;
+      transition: background .14s ease, border-color .14s ease;
+    }
+    .alert-cancel:hover { background: color-mix(in oklab, var(--ink) 4%, var(--paper)); border-color: var(--line2); }
 
     /* === Generic form modal === */
     .form-head {

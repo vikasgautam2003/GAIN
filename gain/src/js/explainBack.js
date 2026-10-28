@@ -188,7 +188,8 @@ export async function openExplainBackDrill() {
     } catch (e) {
       gradeBtn.disabled = false;
       gradeBtn.textContent = "Grade me";
-      alert(`Couldn't grade: ${e.message || e}`);
+      const { showAlert } = await import("./modals.js");
+      await showAlert({ title: "Couldn't grade", message: String(e.message || e), tone: "error" });
     }
   });
 }

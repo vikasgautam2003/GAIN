@@ -444,7 +444,12 @@ async function askAiForOrder(sheetName, currentItems) {
   const apiKey = (await secure.get("groq_api_key").catch(() => null)) ||
                  (await secure.get("grok_api_key").catch(() => null));
   if (!apiKey) {
-    alert("No Groq API key — add one in Settings → AI butler to use ✦ Ask AI.");
+    const { showAlert } = await import("./modals.js");
+    await showAlert({
+      title: "Groq API key needed",
+      message: "Add a Groq API key in Settings → AI butler to use ✦ Ask AI.",
+      tone: "warn",
+    });
     return null;
   }
 

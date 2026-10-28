@@ -110,7 +110,13 @@ export async function openCheatsheet(patternName) {
 
   // Regenerate button
   scrim.querySelector("#cs-regen")?.addEventListener("click", async () => {
-    if (!confirm(`Regenerate the cheatsheet for "${patternName}"? Any inline edits will be lost.`)) return;
+    const { confirmDanger } = await import("./modals.js");
+    const ok = await confirmDanger({
+      title: `Regenerate "${patternName}" cheatsheet?`,
+      message: "Any inline edits you made will be lost. Groq will build a fresh version from scratch.",
+      confirmLabel: "Regenerate",
+    });
+    if (!ok) return;
     deleteCheatsheet(patternName);
     scrim.remove();
     openCheatsheet(patternName);
