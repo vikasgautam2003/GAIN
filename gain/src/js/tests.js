@@ -80,58 +80,130 @@ function renderNewTab() {
 
   const shape = paperShapeFor(curSheet, pickerState.lengthMode);
   const totalQ = shape.mcq + shape.written + shape.coding;
+  const bountyEstimate = 100 + 10 * shape.mcq + 50 * shape.written + 100 * shape.coding;
+
+  const SHEET_ICONS = {
+    "DSA": "⚡", "SQL": "🗄", "System Design": "🏗",
+    "Integrations": "🔌", "Interview Extras": "🎯", "OS & Networking": "⚙",
+  };
+  const SHEET_TAGLINES = {
+    "DSA": "Code + MCQs",
+    "SQL": "Query + MCQs",
+    "System Design": "Design + MCQs",
+    "Integrations": "Scenarios + MCQs",
+    "Interview Extras": "MCQs only",
+    "OS & Networking": "Written + MCQs",
+  };
 
   return `
-    <div class="t-picker">
-      <div class="t-field">
-        <label>SHEET</label>
-        <select id="t-sheet">
-          ${names.map(n => `<option value="${esc(n)}" ${n === curSheet ? "selected" : ""}>${esc(n)}</option>`).join("")}
-        </select>
-      </div>
-
-      <div class="t-field">
-        <label>DIFFICULTY</label>
-        <div class="t-pill-row">
-          ${["Easy", "Medium", "Hard", "Mixed"].map(d => `
-            <button class="t-pill ${pickerState.difficulty === d ? "active" : ""}" data-diff="${d}">${d}</button>
-          `).join("")}
+    <div class="t-picker-card">
+      <!-- STEP 1 — SHEET -->
+      <div class="t-step">
+        <div class="t-step-head">
+          <span class="t-step-num">01</span>
+          <h3>Pick a sheet</h3>
+          <span class="t-step-sub">one paper per sheet · pattern mix differs</span>
+        </div>
+        <div class="t-sheet-grid">
+          ${names.map(n => {
+            const icon = SHEET_ICONS[n] || "📘";
+            const tag = SHEET_TAGLINES[n] || "";
+            const selected = n === curSheet;
+            return `
+              <button class="t-sheet-tile ${selected ? "selected" : ""}" data-sheet="${esc(n)}">
+                <span class="t-sheet-ic">${icon}</span>
+                <span class="t-sheet-name">${esc(n)}</span>
+                <span class="t-sheet-tag">${esc(tag)}</span>
+                ${selected ? `<span class="t-sheet-check">✓</span>` : ""}
+              </button>
+            `;
+          }).join("")}
         </div>
       </div>
 
-      <div class="t-field">
-        <label>LENGTH</label>
-        <div class="t-pill-row">
-          ${[
-            { k: "quick", lbl: "Quick", m: paperShapeFor(curSheet, "quick").minutes },
-            { k: "standard", lbl: "Standard", m: paperShapeFor(curSheet, "standard").minutes },
-            { k: "deep", lbl: "Deep", m: paperShapeFor(curSheet, "deep").minutes },
-          ].map(x => `
-            <button class="t-pill ${pickerState.lengthMode === x.k ? "active" : ""}" data-len="${x.k}">${x.lbl} · ${x.m}m</button>
-          `).join("")}
+      <!-- STEP 2 — DIFFICULTY + LENGTH -->
+      <div class="t-step">
+        <div class="t-step-head">
+          <span class="t-step-num">02</span>
+          <h3>Shape the paper</h3>
+          <span class="t-step-sub">how hard · how long</span>
+        </div>
+        <div class="t-shape-grid">
+          <div class="t-shape-col">
+            <label class="t-shape-label">Difficulty</label>
+            <div class="t-pill-row">
+              ${["Easy", "Medium", "Hard", "Mixed"].map(d => `
+                <button class="t-pill ${pickerState.difficulty === d ? "active" : ""}" data-diff="${d}">${d}</button>
+              `).join("")}
+            </div>
+          </div>
+          <div class="t-shape-col">
+            <label class="t-shape-label">Length</label>
+            <div class="t-pill-row">
+              ${[
+                { k: "quick", lbl: "Quick", m: paperShapeFor(curSheet, "quick").minutes, ic: "⚡" },
+                { k: "standard", lbl: "Standard", m: paperShapeFor(curSheet, "standard").minutes, ic: "📄" },
+                { k: "deep", lbl: "Deep", m: paperShapeFor(curSheet, "deep").minutes, ic: "📚" },
+              ].map(x => `
+                <button class="t-pill t-pill-len ${pickerState.lengthMode === x.k ? "active" : ""}" data-len="${x.k}">
+                  <span class="t-pill-len-ic">${x.ic}</span>
+                  <span>${x.lbl}</span>
+                  <span class="t-pill-len-m">${x.m}m</span>
+                </button>
+              `).join("")}
+            </div>
+          </div>
         </div>
       </div>
 
+      <!-- STEP 3 — TOPICS -->
       ${availableTopics.length ? `
-        <div class="t-field">
-          <label>TOPICS <span class="t-field-hint">tap to toggle · empty = any pattern in this sheet</span></label>
-          <div class="t-topic-grid">
+        <div class="t-step">
+          <div class="t-step-head">
+            <span class="t-step-num">03</span>
+            <h3>Narrow the topics</h3>
+            <span class="t-step-sub">
+              ${curTopics.length > 0
+                ? `<b>${curTopics.length}</b> selected · tap any to toggle`
+                : `empty = any pattern in this sheet`}
+            </span>
+            ${curTopics.length > 0 ? `<button class="t-clear-topics" id="t-clear-topics">Clear</button>` : ""}
+          </div>
+          <div class="t-topic-bank">
             ${availableTopics.map(t => `
-              <button class="t-topic ${curTopics.includes(t) ? "selected" : ""}" data-topic="${esc(t)}">${esc(t)}</button>
+              <button class="t-topic ${curTopics.includes(t) ? "selected" : ""}" data-topic="${esc(t)}">
+                <span>${esc(t)}</span>
+                ${curTopics.includes(t) ? `<span class="t-topic-check">✓</span>` : ""}
+              </button>
             `).join("")}
           </div>
         </div>
       ` : ""}
 
-      <div class="t-summary">
-        <div class="t-summary-stat"><label>Questions</label><b>${totalQ}</b></div>
-        <div class="t-summary-stat"><label>MCQ</label><b>${shape.mcq}</b></div>
-        <div class="t-summary-stat"><label>Written</label><b>${shape.written}</b></div>
-        <div class="t-summary-stat"><label>Coding</label><b>${shape.coding}</b></div>
-        <div class="t-summary-stat"><label>Timer</label><b>${shape.minutes} min</b></div>
-      </div>
-
-      <div class="t-actions">
+      <!-- PREVIEW + LAUNCH -->
+      <div class="t-launch">
+        <div class="t-preview">
+          <div class="t-preview-stat t-preview-stat-hero">
+            <label>Total questions</label>
+            <b>${totalQ}</b>
+          </div>
+          <div class="t-preview-divider"></div>
+          <div class="t-preview-breakdown">
+            ${shape.mcq ? `<span><b>${shape.mcq}</b> MCQ</span>` : ""}
+            ${shape.written ? `<span><b>${shape.written}</b> written</span>` : ""}
+            ${shape.coding ? `<span><b>${shape.coding}</b> coding</span>` : ""}
+          </div>
+          <div class="t-preview-divider"></div>
+          <div class="t-preview-stat">
+            <label>Timer</label>
+            <b>${shape.minutes}<small>min</small></b>
+          </div>
+          <div class="t-preview-divider"></div>
+          <div class="t-preview-stat t-preview-stat-bounty">
+            <label>Max bounty</label>
+            <b>₹${bountyEstimate}</b>
+          </div>
+        </div>
         <button class="t-btn-primary" id="t-start">
           <span>▶</span> Generate & Start test
         </button>
@@ -231,8 +303,14 @@ function wire(root) {
 }
 
 function wirePanel(root, panel) {
-  panel.querySelector("#t-sheet")?.addEventListener("change", (e) => {
-    pickerState.sheetName = e.target.value;
+  panel.querySelectorAll("[data-sheet]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      pickerState.sheetName = btn.dataset.sheet;
+      pickerState.topics = [];
+      paint(root);
+    });
+  });
+  panel.querySelector("#t-clear-topics")?.addEventListener("click", () => {
     pickerState.topics = [];
     paint(root);
   });
@@ -308,14 +386,14 @@ function injectStyles() {
   const s = document.createElement("style");
   s.id = "tests-page-styles";
   s.textContent = `
-    .tests { padding: 20px 16px 60px; max-width: 1120px; }
-    .t-head { max-width: 920px; margin: 28px auto 26px; }
-    .t-eyebrow { font: 700 11.5px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase; color: var(--gold); margin-bottom: 12px; display: inline-block; }
-    .t-title { margin: 0 0 10px; font: 600 46px/1.02 var(--font-sans); letter-spacing: -.03em; color: var(--ink); }
-    .t-sub { font: 400 15px/1.55 var(--font-sans); color: var(--mut); margin: 0; max-width: 60ch; }
+    .tests { padding: 18px 16px 60px; max-width: 1120px; margin: 0 auto; }
+    .t-head { margin: 20px 0 20px; max-width: 820px; }
+    .t-eyebrow { font: 700 11.5px/1 var(--font-sans); letter-spacing: .22em; text-transform: uppercase; color: var(--gold); margin-bottom: 10px; display: inline-block; }
+    .t-title { margin: 0 0 8px; font: 600 40px/1.04 var(--font-sans); letter-spacing: -.028em; color: var(--ink); }
+    .t-sub { font: 400 14.5px/1.55 var(--font-sans); color: var(--mut); margin: 0; max-width: 60ch; }
 
     .t-tabs {
-      display: inline-flex; gap: 2px; max-width: 1120px; margin: 10px auto 24px;
+      display: inline-flex; gap: 2px; margin: 4px 0 20px;
       padding: 5px; border-radius: 14px;
       background: color-mix(in oklab, var(--mut) 8%, var(--paper));
       border: 1px solid var(--line);
@@ -337,57 +415,163 @@ function injectStyles() {
 
     .t-panel { max-width: 1120px; margin: 0 auto; }
 
-    /* --- New test picker --- */
-    .t-picker { display: flex; flex-direction: column; gap: 18px; }
-    .t-field { display: flex; flex-direction: column; gap: 8px; }
-    .t-field label { font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
-    .t-field-hint { color: var(--mut); font-weight: 500; letter-spacing: .02em; text-transform: none; margin-left: 8px; }
-    .t-field select {
-      padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
-      background: var(--paper); color: var(--ink); font: 500 13.5px/1 var(--font-sans);
-      max-width: 320px;
+    /* === NEW PICKER CARD === */
+    .t-picker-card {
+      background: var(--paper); border: 1px solid var(--line); border-radius: 18px;
+      padding: 6px 4px;
+      box-shadow: 0 2px 8px -2px rgba(0,0,0,.04);
+      overflow: hidden;
     }
-    .t-field select:focus { outline: 2px solid var(--gold); outline-offset: -2px; }
 
+    .t-step {
+      padding: 22px 26px;
+      border-bottom: 1px solid var(--line);
+    }
+    .t-step:last-of-type { border-bottom: none; }
+    .t-step-head {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .t-step-num {
+      font: 800 11px/1 var(--font-sans); letter-spacing: .18em;
+      color: var(--gold); padding: 5px 9px; border-radius: 6px;
+      background: color-mix(in oklab, var(--gold) 14%, var(--paper));
+    }
+    .t-step-head h3 {
+      margin: 0; font: 600 16px/1.25 var(--font-sans); color: var(--ink); letter-spacing: -.015em;
+    }
+    .t-step-sub {
+      margin-left: auto;
+      font: 500 12px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .01em;
+    }
+    .t-step-sub b { color: var(--ink); font-weight: 700; }
+    .t-clear-topics {
+      padding: 5px 10px; border-radius: 6px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--mut);
+      font: 600 11px/1 var(--font-sans); cursor: pointer;
+    }
+    .t-clear-topics:hover { color: var(--red); border-color: var(--red); }
+
+    /* --- Sheet grid --- */
+    .t-sheet-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    .t-sheet-tile {
+      position: relative; display: flex; flex-direction: column; gap: 4px;
+      padding: 14px 16px; text-align: left;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+      cursor: pointer; transition: all .14s ease;
+    }
+    .t-sheet-tile:hover {
+      border-color: var(--line2); transform: translateY(-1px);
+      box-shadow: 0 4px 12px -4px rgba(0,0,0,.08);
+    }
+    .t-sheet-tile.selected {
+      border-color: color-mix(in oklab, var(--gold) 50%, var(--line));
+      background: linear-gradient(135deg,
+        color-mix(in oklab, var(--gold) 14%, var(--paper)) 0%,
+        color-mix(in oklab, var(--gold) 4%, var(--paper)) 100%);
+      box-shadow: 0 6px 16px -6px color-mix(in oklab, var(--gold) 50%, transparent);
+    }
+    .t-sheet-ic {
+      font-size: 22px; line-height: 1; margin-bottom: 2px;
+    }
+    .t-sheet-name {
+      font: 700 14px/1.2 var(--font-sans); color: var(--ink); letter-spacing: -.012em;
+    }
+    .t-sheet-tag {
+      font: 500 11.5px/1.3 var(--font-sans); color: var(--mut); letter-spacing: .01em;
+    }
+    .t-sheet-check {
+      position: absolute; top: 10px; right: 12px;
+      font: 800 13px/1 var(--font-sans); color: var(--gold);
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--paper); border: 1px solid color-mix(in oklab, var(--gold) 50%, var(--line));
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+
+    /* --- Shape (difficulty + length) --- */
+    .t-shape-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 640px) { .t-shape-grid { grid-template-columns: 1fr; } }
+    .t-shape-col { display: flex; flex-direction: column; gap: 8px; }
+    .t-shape-label { font: 700 10.5px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
     .t-pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
     .t-pill {
-      padding: 8px 14px; border-radius: 999px;
-      background: var(--paper); border: 1px solid var(--line); color: var(--mut);
+      padding: 9px 14px; border-radius: 10px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--ink);
       font: 600 12.5px/1 var(--font-sans); cursor: pointer;
       transition: all .14s ease;
     }
-    .t-pill:hover { color: var(--ink); border-color: var(--line2); }
-    .t-pill.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-
-    .t-topic-grid { display: flex; flex-wrap: wrap; gap: 6px; max-width: 920px; }
-    .t-topic {
-      padding: 6px 12px; border-radius: 8px;
-      background: var(--paper); border: 1px solid var(--line); color: var(--mut);
-      font: 500 12px/1 var(--font-sans); cursor: pointer;
-      transition: all .14s ease;
+    .t-pill:hover { border-color: var(--line2); background: color-mix(in oklab, var(--ink) 3%, var(--paper)); }
+    .t-pill.active {
+      background: var(--ink); color: var(--paper); border-color: var(--ink);
+      box-shadow: 0 2px 6px -2px rgba(0,0,0,.2);
     }
-    .t-topic:hover { color: var(--ink); border-color: var(--line2); }
-    .t-topic.selected { background: color-mix(in oklab, var(--gold) 14%, var(--paper)); border-color: color-mix(in oklab, var(--gold) 40%, var(--line)); color: var(--ink); font-weight: 600; }
+    .t-pill-len { display: inline-flex; align-items: center; gap: 7px; }
+    .t-pill-len-ic { font-size: 13px; opacity: .85; }
+    .t-pill-len-m { font-weight: 500; color: var(--mut); letter-spacing: .02em; }
+    .t-pill-len.active .t-pill-len-m { color: var(--paper); opacity: .8; }
 
-    .t-summary {
-      display: flex; flex-wrap: wrap; gap: 24px;
-      padding: 14px 18px; border-radius: 12px;
-      background: color-mix(in oklab, var(--mut) 6%, var(--paper));
+    /* --- Topic bank --- */
+    .t-topic-bank {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      max-height: 260px; overflow-y: auto;
+      padding: 10px 12px; border-radius: 10px;
+      background: color-mix(in oklab, var(--mut) 5%, var(--paper));
       border: 1px solid var(--line);
     }
-    .t-summary-stat { display: flex; flex-direction: column; gap: 2px; }
-    .t-summary-stat label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
-    .t-summary-stat b { font: 800 20px/1 var(--font-sans); color: var(--ink); letter-spacing: -.02em; }
+    .t-topic {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 12px; border-radius: 8px;
+      background: var(--paper); border: 1px solid var(--line); color: var(--mut);
+      font: 500 12px/1 var(--font-sans); cursor: pointer;
+      transition: all .12s ease;
+    }
+    .t-topic:hover { color: var(--ink); border-color: var(--line2); }
+    .t-topic.selected {
+      background: color-mix(in oklab, var(--gold) 18%, var(--paper));
+      border-color: color-mix(in oklab, var(--gold) 44%, var(--line));
+      color: var(--ink); font-weight: 700;
+    }
+    .t-topic-check { font-weight: 800; color: var(--gold); font-size: 11px; }
 
-    .t-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    /* --- Launch section (preview + button) --- */
+    .t-launch {
+      padding: 24px 26px;
+      background: linear-gradient(180deg, color-mix(in oklab, var(--ink) 2%, var(--paper)) 0%, var(--paper) 100%);
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .t-preview {
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+      padding: 16px 20px; border-radius: 14px;
+      background: var(--paper);
+      border: 1px solid color-mix(in oklab, var(--ink) 10%, var(--line));
+      box-shadow: 0 4px 12px -4px rgba(0,0,0,.06);
+    }
+    .t-preview-stat { display: flex; flex-direction: column; gap: 2px; }
+    .t-preview-stat label { font: 700 10px/1 var(--font-sans); letter-spacing: .14em; text-transform: uppercase; color: var(--mut); }
+    .t-preview-stat b { font: 800 24px/1 var(--font-sans); color: var(--ink); letter-spacing: -.028em; }
+    .t-preview-stat b small { font: 500 11px/1 var(--font-sans); color: var(--mut); margin-left: 3px; }
+    .t-preview-stat-hero b { font-size: 32px; color: var(--gold); }
+    .t-preview-stat-bounty b { color: var(--gold); }
+    .t-preview-divider { width: 1px; height: 36px; background: var(--line); }
+    .t-preview-breakdown {
+      display: flex; flex-direction: column; gap: 3px;
+      font: 500 12px/1.4 var(--font-sans); color: var(--mut); letter-spacing: .01em;
+    }
+    .t-preview-breakdown span b { color: var(--ink); font-weight: 700; font-size: 13.5px; margin-right: 3px; }
+
     .t-btn-primary {
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      padding: 14px 20px; border-radius: 12px; width: 100%; max-width: 320px;
-      background: var(--ink); color: var(--paper); border: none;
+      padding: 14px 24px; border-radius: 12px;
+      background: linear-gradient(180deg, var(--ink) 0%, color-mix(in oklab, var(--ink) 92%, black) 100%);
+      color: var(--paper); border: none;
       font: 700 14px/1 var(--font-sans); letter-spacing: -.005em; cursor: pointer;
       transition: all .14s ease;
+      box-shadow: 0 6px 18px -4px rgba(0,0,0,.25);
     }
-    .t-btn-primary:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+    .t-btn-primary:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); box-shadow: 0 8px 20px -4px rgba(0,0,0,.3); }
     .t-btn-primary:disabled { opacity: .7; cursor: progress; }
     .t-btn-primary span:first-child { font-size: 14px; }
     .t-spin {
